@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="800" height="600" fill="#1e1e1e" rx="10" ry="10"/>
+  
+  <!-- Title -->
+  <text x="400" y="40" font-family="Arial" font-size="24" fill="#ffffff" text-anchor="middle">UltraCode Clone Architecture</text>
+  
+  <!-- Input Layer -->
+  <rect x="50" y="100" width="700" height="100" fill="#2d2d2d" rx="5" ry="5" stroke="#3a3a3a" stroke-width="2"/>
+  <text x="400" y="120" font-family="Arial" font-size="18" fill="#90caf9" text-anchor="middle">Input Capture Layer</text>
+  
+  <!-- Input Components -->
+  <rect x="100" y="140" width="250" height="40" fill="#333333" rx="5" ry="5" stroke="#444444" stroke-width="1"/>
+  <text x="225" y="165" font-family="Arial" font-size="14" fill="#ffffff" text-anchor="middle">Screen Capture &amp; OCR</text>
+  
+  <rect x="450" y="140" width="250" height="40" fill="#333333" rx="5" ry="5" stroke="#444444" stroke-width="1"/>
+  <text x="575" y="165" font-family="Arial" font-size="14" fill="#ffffff" text-anchor="middle">Audio Capture &amp; Transcription</text>
+  
+  <!-- Processing Layer -->
+  <rect x="50" y="230" width="700" height="100" fill="#2d2d2d" rx="5" ry="5" stroke="#3a3a3a" stroke-width="2"/>
+  <text x="400" y="250" font-family="Arial" font-size="18" fill="#90caf9" text-anchor="middle">Processing Layer</text>
+  
+  <!-- Processing Components -->
+  <rect x="275" y="270" width="250" height="40" fill="#333333" rx="5" ry="5" stroke="#444444" stroke-width="1"/>
+  <text x="400" y="295" font-family="Arial" font-size="14" fill="#ffffff" text-anchor="middle">AI Engine &amp; Context Fusion</text>
+  
+  <!-- Output Layer -->
+  <rect x="50" y="360" width="700" height="100" fill="#2d2d2d" rx="5" ry="5" stroke="#3a3a3a" stroke-width="2"/>
+  <text x="400" y="380" font-family="Arial" font-size="18" fill="#90caf9" text-anchor="middle">Output Layer</text>
+  
+  <!-- Output Components -->
+  <rect x="100" y="400" width="250" height="40" fill="#333333" rx="5" ry="5" stroke="#444444" stroke-width="1"/>
+  <text x="225" y="425" font-family="Arial" font-size="14" fill="#ffffff" text-anchor="middle">Invisible UI Overlay</text>
+  
+  <rect x="450" y="400" width="250" height="40" fill="#333333" rx="5" ry="5" stroke="#444444" stroke-width="1"/>
+  <text x="575" y="425" font-family="Arial" font-size="14" fill="#ffffff" text-anchor="middle">Hotkey System</text>
+  
+  <!-- System Layer -->
+  <rect x="50" y="490" width="700" height="70" fill="#2d2d2d" rx="5" ry="5" stroke="#3a3a3a" stroke-width="2"/>
+  <text x="400" y="510" font-family="Arial" font-size="18" fill="#90caf9" text-anchor="middle">System Integration</text>
+  
+  <!-- System Components -->
+  <rect x="100" y="530" width="180" height="30" fill="#333333" rx="5" ry="5" stroke="#444444" stroke-width="1"/>
+  <text x="190" y="550" font-family="Arial" font-size="12" fill="#ffffff" text-anchor="middle">Electron Desktop App</text>
+  
+  <rect x="310" y="530" width="180" height="30" fill="#333333" rx="5" ry="5" stroke="#444444" stroke-width="1"/>
+  <text x="400" y="550" font-family="Arial" font-size="12" fill="#ffffff" text-anchor="middle">FastAPI Backend</text>
+  
+  <rect x="520" y="530" width="180" height="30" fill="#333333" rx="5" ry="5" stroke="#444444" stroke-width="1"/>
+  <text x="610" y="550" font-family="Arial" font-size="12" fill="#ffffff" text-anchor="middle">WebSocket Communication</text>
+  
+  <!-- Arrows -->
+  <!-- Input to Processing -->
+  <line x1="225" y1="180" x2="350" y2="270" stroke="#90caf9" stroke-width="2"/>
+  <line x1="575" y1="180" x2="450" y2="270" stroke="#90caf9" stroke-width="2"/>
+  
+  <!-- Processing to Output -->
+  <line x1="350" y1="310" x2="225" y2="400" stroke="#90caf9" stroke-width="2"/>
+  <line x1="450" y1="310" x2="575" y2="400" stroke="#90caf9" stroke-width="2"/>
+  
+  <!-- Output to System -->
+  <line x1="225" y1="440" x2="190" y2="530" stroke="#90caf9" stroke-width="2"/>
+  <line x1="575" y1="440" x2="610" y2="530" stroke="#90caf9" stroke-width="2"/>
+  
+  <!-- System Interconnections -->
+  <line x1="280" y1="545" x2="310" y2="545" stroke="#90caf9" stroke-width="2"/>
+  <line x1="490" y1="545" x2="520" y2="545" stroke="#90caf9" stroke-width="2"/>
+</svg>

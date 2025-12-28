@@ -1,0 +1,61 @@
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: transparent; /* Remove global tint to prevent brightness fluctuation */
+}
+
+#overlay-container {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0, 0, 0, 0.5);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+  align-items: center;
+}
+
+#controls {
+  color: white;
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+#controls span, #controls select {
+  cursor: pointer;
+}
+
+/* Inline result panel styling (inherits same translucent style) */
+#result-panel {
+  color: white;
+  background-color: rgba(0, 0, 0, 0.7);
+  border-radius: 10px;
+  width: 70vw;
+  max-width: 900px;
+  max-height: 60vh;
+  overflow: auto;
+}
+#result-header {
+  display: flex;
+  gap: 10px;
+  padding: 8px 12px;
+  background-color: rgba(0,0,0,0.5);
+  border-radius: 10px 10px 0 0;
+}
+#result-header button {
+  background: #333;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+#result-content {
+  white-space: pre-wrap;
+  padding: 12px;
+}

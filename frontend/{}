@@ -1,0 +1,23 @@
+[1] [eval]:1
+[1] setTimeout(() =, 5000)
+[1]             ^
+[1] 
+[1] SyntaxError: Unexpected token ')'
+[1]     at makeContextifyScript (node:internal/vm:122:14)
+[1]     at node:internal/process/execution:89:22
+[1]     at [eval]-wrapper:6:24
+[1]     at runScript (node:internal/process/execution:83:62)
+[1]     at evalScript (node:internal/process/execution:114:10)
+[1]     at node:internal/main/eval_string:30:3
+[1] 
+[1] Node.js v18.20.8
+[1] node -e "setTimeout(() =, 5000)" && electron . exited with code 1
+[0] 
+[0] > ultracode-clone@1.0.0 start
+[0] > react-scripts start
+[0] 
+[0] (node:24428) [DEP_WEBPACK_DEV_SERVER_ON_AFTER_SETUP_MIDDLEWARE] DeprecationWarning: 'onAfterSetupMiddleware' option is deprecated. Please use the 'setupMiddlewares' option.
+[0] (Use `node --trace-deprecation ...` to show where the warning was created)
+[0] (node:24428) [DEP_WEBPACK_DEV_SERVER_ON_BEFORE_SETUP_MIDDLEWARE] DeprecationWarning: 'onBeforeSetupMiddleware' option is deprecated. Please use the 'setupMiddlewares' option.
+[0] Starting the development server...
+[0] 

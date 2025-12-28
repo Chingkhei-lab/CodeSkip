@@ -1,0 +1,22 @@
+{
+  "name": "ultracode-clone",
+  "version": "1.0.0",
+  "description": "A functional clone of Ultracode.ai that provides real-time AI assistance during coding interviews.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.1.0",
+    "ip": "^2.0.1",
+    "ps-list": "^8.1.1",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1"
+  }
+}

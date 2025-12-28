@@ -1,0 +1,33 @@
+# Python virtual environments
+venv/
+backend/venv/
+
+# Node/Electron
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+
+# Logs and debug output
+*.log
+frontend/public/electron.log
+
+# Caches
+cache/
+backend/cache/
+__pycache__/
+*.pkl
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+
+# Secrets
+.env
+backend/.env
+
+# Native build artifacts (if any)
+shared/native/**/*.obj
+shared/native/**/*.o
+shared/native/**/*.dll
+shared/native/**/*.exe

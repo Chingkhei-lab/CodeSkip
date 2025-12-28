@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stealth Overlay</title>
+  <style>
+    :root {
+      /* Global transparency (0.0–1.0). Adjusted via keyboard shortcuts */
+      --overlay-alpha: 0.6;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      /* Pass-through by default: only designated elements will handle pointer events */
+      pointer-events: none;
+    }
+    /* Pill (collapsed) mode */
+    #pill {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,var(--overlay-alpha));
+      border-radius: 16px;
+      padding: 6px 12px;
+      color: #fff;
+      font-size: 12px;
+      white-space: nowrap;
+      cursor: pointer;
+      /* Avoid halo/waves: remove blur */
+      /* backdrop-filter: blur(10px); */
+      pointer-events: auto;
+      z-index: 10001;
+    }
+    /* Thinking indicator style: extend pill width and show status */
+    #pill.pill-thinking {
+      display: block !important;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60%;
+      max-width: 900px;
+      text-align: center;
+      font-size: 13px;
+      cursor: default;
+      pointer-events: none; /* keep overlay click-through during thinking */
+      transition: width 150ms ease-in-out, opacity 150ms ease-in-out;
+    }
+    #pill.pill-thinking .dots::after {
+      content: '…';
+      animation: blink 1.2s infinite;
+    }
+    @keyframes blink { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
+    /* Remove hover alpha change to prevent transparency flicker */
+    /* #pill:hover { background: rgba(0,0,0,0.85); } */
+    
+    #navbar {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: rgba(0, 0, 0, var(--overlay-alpha));
+      border-radius: 20px;
+      padding: 8px 16px;
+      display: flex;
+      gap: 15px;
+      align-items: center;
+      /* Avoid halo/waves: remove blur */
+      /* backdrop-filter: blur(10px); */
+      pointer-events: auto;
+      z-index: 10000;
+      /* Remove opacity transition to avoid perceived flicker */
+      /* transition: opacity 0.3s ease; */
+    }
+    
+    .shortcut {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      /* Remove transition to avoid perceived flicker on hover */
+      /* transition: background 0.2s; */
+    }
+    /* Remove hover background change */
+    /* .shortcut:hover { background: rgba(255, 255, 255, 0.2); } */
+    
+    #shot-count {
+      color: #aaa;
+      font-size: 12px;
+      margin-left: 5px;
+    }
+    
+    #ai-result {
+      position: fixed;
+      top: 70px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 80%;
+      max-width: 900px;
+      background-color: rgba(0, 0, 0, var(--overlay-alpha));
+      border-radius: 15px;
+      padding: 20px;
+      /* Avoid halo/waves: remove blur */
+      /* backdrop-filter: blur(15px); */
+      z-index: 9999;
+      display: none;
+      max-height: 70vh;
+      overflow-y: auto;
+      pointer-events: auto; /* interactive area */
+      color: #fff;
+      font-size: 14px;
+      line-height: 1.5;
+      /* Remove drop shadow to prevent visual waves */
+      /* box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); */
+      scrollbar-width: none; /* Firefox */
+    }
+
+    /* Show scrollbars for long content */
+    #ai-result::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    #ai-result::-webkit-scrollbar-track {
+      background: rgba(255,255,255,0.08);
+      border-radius: 8px;
+    }
+    #ai-result::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.35);
+      border-radius: 8px;
+    }
+    
+    .result-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .result-actions button {
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 6px 12px;
+      margin-left: 10px;
+      cursor: pointer;
+    }
+    
+    .result-actions button:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+    
+    .thinking {
+      color: #666;
+      font-style: italic;
+    }
+    
+    pre {
+      background: rgba(0, 0, 0, var(--overlay-alpha));
+      border-radius: 8px;
+      padding: 15px;
+      overflow-x: auto;
+      margin: 15px 0;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Collapsed pill (hidden by default) -->
+  <div id="pill" style="display:none;">Ultracode</div>
+  <!-- Full UI (visible on startup) -->
+  <div id="navbar" style="display:flex;">
+    <div class="shortcut" id="screenshot">Screenshot (Ctrl+Shift+C)</div>
+    <div class="shortcut" id="solve">Solve (Ctrl+Shift+E)</div>
+    <div class="shortcut" id="start-over">Clear</div>
+    <div id="shot-count">Shots: 0</div>
+  </div>
+  
+  <div id="ai-result">
+    <div class="result-header">
+      <div>AI Response</div>
+      <div class="result-actions">
+        <button id="copy-result">Copy</button>
+        <button id="close-result">Close</button>
+      </div>
+    </div>
+    <div id="result-content"></div>
+  </div>
+
+  <script>
+const { ipcRenderer } = require('electron');
+const log = (m) => { try { ipcRenderer.send('log', String(m)); } catch {} };
+
+let shots = 0, isResultVisible = false;
+const pill   = document.getElementById('pill');
+const navbar = document.getElementById('navbar');
+const panel  = document.getElementById('ai-result');
+const cnt    = document.getElementById('shot-count');
+let ws, thinking = false, tSlow, tLong;
+
+function connect() {
+  ws = new WebSocket('ws://127.0.0.1:8000/ws');
+  ws.onopen  = () => log('[WS] connected');
+  ws.onclose = () => setTimeout(connect, 3000);
+  ws.onerror = e => console.error('[WS] error', e);
+  ws.onmessage = msg => {
+    try {
+      const d = JSON.parse(msg.data);
+      if (d.type === 'response' && d.data?.ai_response) {
+        stopThink();
+        const raw = d.data.ai_response;
+        let explanation = '', code = '';
+        if (typeof raw === 'string') {
+          if (raw.trim().startsWith('{')) {               // JSON path
+            try {
+              const obj = JSON.parse(raw);
+              explanation = obj.explanation || '';
+              code = (obj.python_code || '').replace(/^```python?/,'').replace(/```$/,'').trim();
+            } catch { explanation = raw; }
+          } else { explanation = raw; }                   // plain text
+        } else {                                           // already object
+          explanation = raw.explanation || '';
+          code = (raw.python_code || '').replace(/^```python?/,'').replace(/```$/,'').trim();
+        }
+        showResult(explanation, code);
+      } else if (d.type === 'error') {
+        stopThink(); showResult(d.message || 'Unknown error', '');
+      }
+    } catch (e) { log('ws parse err: '+e); }
+  };
+}
+function showResult(expl, code) {
+  const safeExpl = expl ? `<div class="thinking">${escapeHtml(expl)}</div>` : '';
+  const safeCode = code ? `<pre>${escapeHtml(code)}</pre>` : '';
+  document.getElementById('result-content').innerHTML = safeExpl + safeCode;
+  panel.style.display = 'block'; isResultVisible = true;
+  const r = navbar.getBoundingClientRect();
+  panel.style.top = (r.bottom + 10) + 'px';
+  try { ipcRenderer.send('expand-overlay'); } catch {}
+}
+function hideResult() { panel.style.display = 'none'; isResultVisible = false; }
+
+function startThink() {
+  thinking = true;
+  const r = navbar.getBoundingClientRect();
+  pill.style.top = (r.bottom + 10) + 'px';
+  pill.classList.add('pill-thinking');
+  pill.innerHTML = '<span class="dots">Thinking</span>';
+  clearTimeout(tSlow); clearTimeout(tLong);
+  tSlow = setTimeout(() => { if (thinking) pill.innerHTML = '<span class="dots">Still thinking</span>'; }, 8000);
+  tLong = setTimeout(() => { if (thinking) pill.innerHTML = 'Taking longer than expected…'; }, 25000);
+}
+function stopThink() {
+  thinking = false; clearTimeout(tSlow); clearTimeout(tLong);
+  pill.classList.remove('pill-thinking'); pill.style.display = 'none';
+}
+
+function capture() {
+  if (ws?.readyState === 1) { ws.send(JSON.stringify({type:'capture'})); cnt.textContent = `Shots: ${++shots}`; }
+}
+function solve() {
+  if (ws?.readyState === 1) { startThink(); ws.send(JSON.stringify({type:'solve'})); }
+}
+
+document.getElementById('screenshot').addEventListener('click', capture);
+document.getElementById('solve').addEventListener('click', solve);
+document.getElementById('start-over').addEventListener('click', () => {
+  shots = 0; cnt.textContent = 'Shots: 0'; hideResult();
+  if (ws?.readyState === 1) ws.send(JSON.stringify({type:'clear'}));
+});
+document.getElementById('copy-result').addEventListener('click', () =>
+  navigator.clipboard.writeText(document.getElementById('result-content').innerText));
+document.getElementById('close-result').addEventListener('click', hideResult);
+
+pill.addEventListener('click', () => { navbar.style.display = 'flex'; solve(); });
+
+ipcRenderer.on('screenshot', capture);
+ipcRenderer.on('solve', solve);
+ipcRenderer.on('start-over', () => document.getElementById('start-over').click());
+ipcRenderer.on('scroll-ai-result', (e, d) => { if (panel.style.display !== 'none') panel.scrollBy({top:d, behavior:'smooth'}); });
+function getAlpha() { return Math.min(.95, Math.max(.1, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--overlay-alpha')||'.6'))); }
+function setAlpha(v) { document.documentElement.style.setProperty('--overlay-alpha', String(Math.min(.95, Math.max(.1, v)))); }
+ipcRenderer.on('set-transparency', (e, p) => {
+  const cur = getAlpha();
+  if (p?.action==='inc') setAlpha(cur+.05); else if (p?.action==='dec') setAlpha(cur-.05); else if (typeof p?.value==='number') setAlpha(p.value);
+});
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+connect();
+</body>
+</html>
