@@ -1,7 +1,6 @@
 import os, json, requests, requests.exceptions
 from dotenv import load_dotenv
 load_dotenv()
-
 class AIEngine:
     def __init__(self):
         self.provider = os.getenv("AI_PROVIDER", "openai").strip().lower()
@@ -11,13 +10,13 @@ class AIEngine:
         self.headers  = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
         if self.provider == "openrouter":
             self.headers.update({"HTTP-Referer": os.getenv("APP_REFERER", "http://localhost:3000"),
-                                 "X-Title": os.getenv("APP_TITLE", "UltraCode")})
+            "X-Title": os.getenv("APP_TITLE", "UltraCode")})
 
     # ---------- public entry ----------
     def process(self, screen_text: str, audio_text: str) -> str:
         prompt = self._build_prompt(screen_text, audio_text)
         return self._call_ai(prompt)
-    
+
     # ---------- prompt ----------
     def _build_prompt(self, screen: str, audio: str) -> list:
         system = (
@@ -30,7 +29,7 @@ class AIEngine:
         user = f"Screenshot:\n{screen}\n\nSpoken hint:\n{audio}"
         return [{"role": "system", "content": system},
                 {"role": "user",   "content": user}]
-    
+
     # ---------- api call ----------
     def _call_ai(self, prompt: list) -> str:
         if not self.api_key:

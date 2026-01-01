@@ -186,7 +186,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "1. Open backend/.env file",
                     "2. Add your API key: OPENAI_API_KEY=your_key_here or OPENROUTER_API_KEY=your_key_here",
                     "3. Restart the backend server",
-                    "4. Get an API key from: https://platform.openai.com/api-keys or https://openrouter.ai/keys"
+                    "4. Get an API key from: https://platform.openai.com/api-keys  or https://openrouter.ai/keys "
                 ]
             }
         elif "tesseract" in error_message.lower():
@@ -195,7 +195,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "message": "OCR Configuration Error",
                 "details": "Tesseract OCR is not properly installed or configured.",
                 "resolution": [
-                    "1. Install Tesseract OCR: https://github.com/UB-Mannheim/tesseract/wiki",
+                    "1. Install Tesseract OCR: https://github.com/UB-Mannheim/tesseract/wiki ",
                     "2. Add Tesseract to your system PATH",
                     "3. Or install via package manager: pip install pytesseract",
                     "4. Restart the application after installation"
