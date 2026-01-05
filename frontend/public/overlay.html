@@ -4,7 +4,6 @@
   <title>Stealth Overlay</title>
   <style>
     :root {
-      /* Global transparency (0.0–1.0). Adjusted via keyboard shortcuts */
       --overlay-alpha: 0.6;
     }
     body {
@@ -13,10 +12,8 @@
       overflow: hidden;
       background-color: transparent;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      /* Pass-through by default: only designated elements will handle pointer events */
       pointer-events: none;
     }
-    /* Pill (collapsed) mode */
     #pill {
       position: fixed;
       top: 50%;
@@ -29,12 +26,9 @@
       font-size: 12px;
       white-space: nowrap;
       cursor: pointer;
-      /* Avoid halo/waves: remove blur */
-      /* backdrop-filter: blur(10px); */
       pointer-events: auto;
       z-index: 10001;
     }
-    /* Thinking indicator style: extend pill width and show status */
     #pill.pill-thinking {
       display: block !important;
       top: 20px;
@@ -45,7 +39,7 @@
       text-align: center;
       font-size: 13px;
       cursor: default;
-      pointer-events: none; /* keep overlay click-through during thinking */
+      pointer-events: none;
       transition: width 150ms ease-in-out, opacity 150ms ease-in-out;
     }
     #pill.pill-thinking .dots::after {
@@ -53,8 +47,6 @@
       animation: blink 1.2s infinite;
     }
     @keyframes blink { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
-    /* Remove hover alpha change to prevent transparency flicker */
-    /* #pill:hover { background: rgba(0,0,0,0.85); } */
     
     #navbar {
       position: fixed;
@@ -67,12 +59,8 @@
       display: flex;
       gap: 15px;
       align-items: center;
-      /* Avoid halo/waves: remove blur */
-      /* backdrop-filter: blur(10px); */
       pointer-events: auto;
       z-index: 10000;
-      /* Remove opacity transition to avoid perceived flicker */
-      /* transition: opacity 0.3s ease; */
     }
     
     .shortcut {
@@ -83,11 +71,7 @@
       padding: 6px 12px;
       font-size: 13px;
       cursor: pointer;
-      /* Remove transition to avoid perceived flicker on hover */
-      /* transition: background 0.2s; */
     }
-    /* Remove hover background change */
-    /* .shortcut:hover { background: rgba(255, 255, 255, 0.2); } */
     
     #shot-count {
       color: #aaa;
@@ -105,22 +89,17 @@
       background-color: rgba(0, 0, 0, var(--overlay-alpha));
       border-radius: 15px;
       padding: 20px;
-      /* Avoid halo/waves: remove blur */
-      /* backdrop-filter: blur(15px); */
       z-index: 9999;
       display: none;
       max-height: 70vh;
       overflow-y: auto;
-      pointer-events: auto; /* interactive area */
+      pointer-events: auto;
       color: #fff;
       font-size: 14px;
       line-height: 1.5;
-      /* Remove drop shadow to prevent visual waves */
-      /* box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); */
-      scrollbar-width: none; /* Firefox */
+      scrollbar-width: none;
     }
 
-    /* Show scrollbars for long content */
     #ai-result::-webkit-scrollbar {
       width: 8px;
       height: 8px;
@@ -173,9 +152,7 @@
   </style>
 </head>
 <body>
-  <!-- Collapsed pill (hidden by default) -->
   <div id="pill" style="display:none;">Ultracode</div>
-  <!-- Full UI (visible on startup) -->
   <div id="navbar" style="display:flex;">
     <div class="shortcut" id="screenshot">Screenshot (Ctrl+Shift+C)</div>
     <div class="shortcut" id="solve">Solve (Ctrl+Shift+E)</div>
@@ -205,30 +182,82 @@
     const cnt    = document.getElementById('shot-count');
     let ws, thinking = false, tSlow, tLong;
 
+    // ============================================
+    // CRITICAL FIX: Response locking mechanism
+    // ============================================
+    let responseLocked = false;
+    let lockTimeout = null;
+    let currentResponseContent = null;
+
     function handleWebSocketMessage(msg) {
       try {
         const d = JSON.parse(msg.data);
         if (d.type === 'response' && d.data?.ai_response) {
           stopThink();
+          
+          // CRITICAL: Check if response is locked
+          if (responseLocked) {
+            log('[WS] Response locked - ignoring duplicate message');
+            console.log('[WS] Ignoring duplicate response (locked)');
+            return; // EXIT EARLY - don't update display
+          }
+          
           const raw = d.data.ai_response;
           let explanation = '', code = '';
           if (typeof raw === 'string') {
-            if (raw.trim().startsWith('{')) {               // JSON path
+            if (raw.trim().startsWith('{')) {
               try {
                 const obj = JSON.parse(raw);
                 explanation = obj.explanation || '';
                 code = (obj.python_code || '').replace(/^```python?/,'').replace(/```$/,'').trim();
               } catch { explanation = raw; }
-            } else { explanation = raw; }                   // plain text
-          } else {                                           // already object
+            } else { explanation = raw; }
+          } else {
             explanation = raw.explanation || '';
             code = (raw.python_code || '').replace(/^```python?/,'').replace(/```$/,'').trim();
           }
+          
+          // CRITICAL: Lock response and display
+          lockResponse();
           showResult(explanation, code);
+          
         } else if (d.type === 'error') {
-          stopThink(); showResult(d.message || 'Unknown error', '');
+          stopThink(); 
+          // Errors bypass lock (user needs to see them)
+          showResult(d.message || 'Unknown error', '');
         }
       } catch (e) { log('ws parse err: '+e); }
+    }
+
+    // Lock the response for 15 seconds to prevent overwrites
+    function lockResponse() {
+      responseLocked = true;
+      log('[LOCK] Response locked for 15 seconds');
+      console.log('[LOCK] Response display locked');
+      
+      // Clear any existing timeout
+      if (lockTimeout) {
+        clearTimeout(lockTimeout);
+      }
+      
+      // Auto-unlock after 15 seconds
+      lockTimeout = setTimeout(() => {
+        responseLocked = false;
+        log('[LOCK] Response unlocked');
+        console.log('[LOCK] Response display unlocked');
+      }, 15000); // 15 seconds
+    }
+
+    // Manually unlock response (called when clearing or closing)
+    function unlockResponse() {
+      responseLocked = false;
+      if (lockTimeout) {
+        clearTimeout(lockTimeout);
+        lockTimeout = null;
+      }
+      currentResponseContent = null;
+      log('[LOCK] Response manually unlocked');
+      console.log('[LOCK] Response manually unlocked');
     }
 
     function connect() {
@@ -238,16 +267,30 @@
       ws.onerror = e => console.error('[WS] error', e);
       ws.onmessage = handleWebSocketMessage;
     }
+    
     function showResult(expl, code) {
       const safeExpl = expl ? `<div class="thinking">${escapeHtml(expl)}</div>` : '';
       const safeCode = code ? `<pre>${escapeHtml(code)}</pre>` : '';
-      document.getElementById('result-content').innerHTML = safeExpl + safeCode;
-      panel.style.display = 'block'; isResultVisible = true;
+      const content = safeExpl + safeCode;
+      
+      // Store current content
+      currentResponseContent = content;
+      
+      document.getElementById('result-content').innerHTML = content;
+      panel.style.display = 'block'; 
+      isResultVisible = true;
       const r = navbar.getBoundingClientRect();
       panel.style.top = (r.bottom + 10) + 'px';
       try { ipcRenderer.send('expand-overlay'); } catch {}
+      
+      log('[DISPLAY] Result shown and locked');
     }
-    function hideResult() { panel.style.display = 'none'; isResultVisible = false; }
+    
+    function hideResult() { 
+      panel.style.display = 'none'; 
+      isResultVisible = false;
+      unlockResponse(); // Unlock when closing
+    }
 
     function startThink() {
       thinking = true;
@@ -259,22 +302,34 @@
       tSlow = setTimeout(() => { if (thinking) pill.innerHTML = '<span class="dots">Still thinking</span>'; }, 8000);
       tLong = setTimeout(() => { if (thinking) pill.innerHTML = 'Taking longer than expected…'; }, 25000);
     }
+    
     function stopThink() {
       thinking = false; clearTimeout(tSlow); clearTimeout(tLong);
       pill.classList.remove('pill-thinking'); pill.style.display = 'none';
     }
 
     function capture() {
-      if (ws?.readyState === 1) { ws.send(JSON.stringify({type:'capture'})); cnt.textContent = `Shots: ${++shots}`; }
+      if (ws?.readyState === 1) { 
+        unlockResponse(); // Unlock for new capture
+        ws.send(JSON.stringify({type:'capture'})); 
+        cnt.textContent = `Shots: ${++shots}`; 
+      }
     }
+    
     function solve() {
-      if (ws?.readyState === 1) { startThink(); ws.send(JSON.stringify({type:'solve'})); }
+      if (ws?.readyState === 1) { 
+        // Don't unlock - we want to use cached response from backend
+        startThink(); 
+        ws.send(JSON.stringify({type:'solve'})); 
+      }
     }
 
     document.getElementById('screenshot').addEventListener('click', capture);
     document.getElementById('solve').addEventListener('click', solve);
     document.getElementById('start-over').addEventListener('click', () => {
-      shots = 0; cnt.textContent = 'Shots: 0'; hideResult();
+      shots = 0; 
+      cnt.textContent = 'Shots: 0'; 
+      hideResult(); // This also unlocks
       if (ws?.readyState === 1) ws.send(JSON.stringify({type:'clear'}));
     });
     document.getElementById('copy-result').addEventListener('click', () =>
@@ -287,6 +342,7 @@
     ipcRenderer.on('solve', solve);
     ipcRenderer.on('start-over', () => document.getElementById('start-over').click());
     ipcRenderer.on('scroll-ai-result', (e, d) => { if (panel.style.display !== 'none') panel.scrollBy({top:d, behavior:'smooth'}); });
+    
     function getAlpha() { return Math.min(.95, Math.max(.1, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--overlay-alpha')||'.6'))); }
     function setAlpha(v) { document.documentElement.style.setProperty('--overlay-alpha', String(Math.min(.95, Math.max(.1, v)))); }
     ipcRenderer.on('set-transparency', (e, p) => {
