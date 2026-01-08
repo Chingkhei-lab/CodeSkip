@@ -73,6 +73,12 @@
       cursor: pointer;
     }
     
+    .shortcut.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      background: rgba(128, 128, 128, 0.1);
+    }
+    
     #shot-count {
       color: #aaa;
       font-size: 12px;
@@ -136,8 +142,8 @@
     }
     
     .thinking {
-      color: #666;
-      font-style: italic;
+      color: #eee;
+      margin-bottom: 10px;
     }
     
     pre {
@@ -149,13 +155,22 @@
       font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
       font-size: 13px;
     }
+    
+    .error-message {
+      color: #ff6b6b;
+      background: rgba(255, 107, 107, 0.1);
+      border: 1px solid rgba(255, 107, 107, 0.3);
+      border-radius: 8px;
+      padding: 12px;
+      margin: 10px 0;
+    }
   </style>
 </head>
 <body>
   <div id="pill" style="display:none;">Ultracode</div>
   <div id="navbar" style="display:flex;">
     <div class="shortcut" id="screenshot">Screenshot (Ctrl+Shift+C)</div>
-    <div class="shortcut" id="solve">Solve (Ctrl+Shift+E)</div>
+    <div class="shortcut disabled" id="solve" title="Take a screenshot first">Solve (Ctrl+Shift+E)</div>
     <div class="shortcut" id="start-over">Clear</div>
     <div id="shot-count">Shots: 0</div>
   </div>
@@ -175,16 +190,15 @@
     const { ipcRenderer } = require('electron');
     const log = (m) => { try { ipcRenderer.send('log', String(m)); } catch {} };
 
-    let shots = 0, isResultVisible = false;
-    const pill   = document.getElementById('pill');
+    let shots = 0, isResultVisible = false, hasScreenshot = false;
+    const pill = document.getElementById('pill');
     const navbar = document.getElementById('navbar');
-    const panel  = document.getElementById('ai-result');
-    const cnt    = document.getElementById('shot-count');
+    const panel = document.getElementById('ai-result');
+    const cnt = document.getElementById('shot-count');
+    const solveBtn = document.getElementById('solve');
     let ws, thinking = false, tSlow, tLong;
 
-    // ============================================
-    // CRITICAL FIX: Response locking mechanism
-    // ============================================
+    // Response locking mechanism
     let responseLocked = false;
     let lockTimeout = null;
     let currentResponseContent = null;
@@ -192,18 +206,20 @@
     function handleWebSocketMessage(msg) {
       try {
         const d = JSON.parse(msg.data);
+        
         if (d.type === 'response' && d.data?.ai_response) {
           stopThink();
           
-          // CRITICAL: Check if response is locked
+          // Check if response is locked
           if (responseLocked) {
-            log('[WS] Response locked - ignoring duplicate message');
+            log('[WS] Response locked - ignoring duplicate');
             console.log('[WS] Ignoring duplicate response (locked)');
-            return; // EXIT EARLY - don't update display
+            return;
           }
           
           const raw = d.data.ai_response;
           let explanation = '', code = '';
+          
           if (typeof raw === 'string') {
             if (raw.trim().startsWith('{')) {
               try {
@@ -217,38 +233,34 @@
             code = (raw.python_code || '').replace(/^```python?/,'').replace(/```$/,'').trim();
           }
           
-          // CRITICAL: Lock response and display
           lockResponse();
           showResult(explanation, code);
           
         } else if (d.type === 'error') {
-          stopThink(); 
-          // Errors bypass lock (user needs to see them)
-          showResult(d.message || 'Unknown error', '');
+          stopThink();
+          showError(d.message || 'Unknown error', d.details || '');
+        } else if (d.type === 'cleared') {
+          log('[WS] State cleared');
         }
-      } catch (e) { log('ws parse err: '+e); }
+      } catch (e) { 
+        log('ws parse err: ' + e); 
+      }
     }
 
-    // Lock the response for 15 seconds to prevent overwrites
     function lockResponse() {
       responseLocked = true;
       log('[LOCK] Response locked for 15 seconds');
-      console.log('[LOCK] Response display locked');
       
-      // Clear any existing timeout
       if (lockTimeout) {
         clearTimeout(lockTimeout);
       }
       
-      // Auto-unlock after 15 seconds
       lockTimeout = setTimeout(() => {
         responseLocked = false;
         log('[LOCK] Response unlocked');
-        console.log('[LOCK] Response display unlocked');
-      }, 15000); // 15 seconds
+      }, 15000);
     }
 
-    // Manually unlock response (called when clearing or closing)
     function unlockResponse() {
       responseLocked = false;
       if (lockTimeout) {
@@ -257,39 +269,75 @@
       }
       currentResponseContent = null;
       log('[LOCK] Response manually unlocked');
-      console.log('[LOCK] Response manually unlocked');
     }
 
     function connect() {
-      ws = new WebSocket('ws://127.0.0.1:8000/ws');
-      ws.onopen  = () => log('[WS] connected');
-      ws.onclose = () => setTimeout(connect, 3000);
-      ws.onerror = e => console.error('[WS] error', e);
+      // HARDCODED TOKEN (replace with your actual token)
+      let authToken = '6GQZkm0FSqFTpZxh3lwxyhH-5FvzwVci78xfgaXNatk';
+      
+      // Fallback to localStorage if token changes
+      const storedToken = localStorage.getItem('ws_auth_token');
+      if (storedToken) {
+        authToken = storedToken;
+      }
+
+      const wsUrl = `ws://127.0.0.1:8000/ws?token=${encodeURIComponent(authToken)}`;
+      ws = new WebSocket(wsUrl);
+      
+      ws.onopen = () => {
+        log('[WS] ✓ Connected securely');
+        console.log('[WS] Connected with authentication');
+      };
+      
+      ws.onclose = () => {
+        log('[WS] Connection closed, reconnecting...');
+        setTimeout(connect, 3000);
+      };
+      
+      ws.onerror = (e) => {
+        console.error('[WS] Error:', e);
+        log('[WS] Connection error - check auth token');
+        // Clear token on error so user can re-enter
+        localStorage.removeItem('ws_auth_token');
+      };
+      
       ws.onmessage = handleWebSocketMessage;
     }
-    
+
     function showResult(expl, code) {
       const safeExpl = expl ? `<div class="thinking">${escapeHtml(expl)}</div>` : '';
       const safeCode = code ? `<pre>${escapeHtml(code)}</pre>` : '';
       const content = safeExpl + safeCode;
       
-      // Store current content
       currentResponseContent = content;
-      
       document.getElementById('result-content').innerHTML = content;
-      panel.style.display = 'block'; 
+      panel.style.display = 'block';
       isResultVisible = true;
       const r = navbar.getBoundingClientRect();
       panel.style.top = (r.bottom + 10) + 'px';
-      try { ipcRenderer.send('expand-overlay'); } catch {}
       
+      try { ipcRenderer.send('expand-overlay'); } catch {}
       log('[DISPLAY] Result shown and locked');
     }
-    
-    function hideResult() { 
-      panel.style.display = 'none'; 
+
+    function showError(message, details) {
+      const content = `
+        <div class="error-message">
+          <strong>${escapeHtml(message)}</strong>
+          ${details ? `<p>${escapeHtml(details)}</p>` : ''}
+        </div>
+      `;
+      document.getElementById('result-content').innerHTML = content;
+      panel.style.display = 'block';
+      isResultVisible = true;
+      const r = navbar.getBoundingClientRect();
+      panel.style.top = (r.bottom + 10) + 'px';
+    }
+
+    function hideResult() {
+      panel.style.display = 'none';
       isResultVisible = false;
-      unlockResponse(); // Unlock when closing
+      unlockResponse();
     }
 
     function startThink() {
@@ -299,65 +347,125 @@
       pill.classList.add('pill-thinking');
       pill.innerHTML = '<span class="dots">Thinking</span>';
       clearTimeout(tSlow); clearTimeout(tLong);
-      tSlow = setTimeout(() => { if (thinking) pill.innerHTML = '<span class="dots">Still thinking</span>'; }, 8000);
-      tLong = setTimeout(() => { if (thinking) pill.innerHTML = 'Taking longer than expected…'; }, 25000);
+      tSlow = setTimeout(() => { 
+        if (thinking) pill.innerHTML = '<span class="dots">Still thinking</span>'; 
+      }, 8000);
+      tLong = setTimeout(() => { 
+        if (thinking) pill.innerHTML = 'Taking longer than expected…'; 
+      }, 25000);
     }
-    
+
     function stopThink() {
-      thinking = false; clearTimeout(tSlow); clearTimeout(tLong);
-      pill.classList.remove('pill-thinking'); pill.style.display = 'none';
+      thinking = false;
+      clearTimeout(tSlow);
+      clearTimeout(tLong);
+      pill.classList.remove('pill-thinking');
+      pill.style.display = 'none';
+    }
+
+    function updateSolveButton() {
+      if (hasScreenshot) {
+        solveBtn.classList.remove('disabled');
+        solveBtn.title = 'Analyze the screenshot';
+      } else {
+        solveBtn.classList.add('disabled');
+        solveBtn.title = 'Take a screenshot first';
+      }
     }
 
     function capture() {
-      if (ws?.readyState === 1) { 
-        unlockResponse(); // Unlock for new capture
-        ws.send(JSON.stringify({type:'capture'})); 
-        cnt.textContent = `Shots: ${++shots}`; 
+      if (ws?.readyState === 1) {
+        unlockResponse();
+        ws.send(JSON.stringify({type:'capture'}));
+        shots++;
+        cnt.textContent = `Shots: ${shots}`;
+        
+        // Mark that screenshot was taken
+        hasScreenshot = true;
+        updateSolveButton();
+        log('[SCREENSHOT] Taken - Solve enabled');
       }
     }
-    
+
     function solve() {
-      if (ws?.readyState === 1) { 
-        // Don't unlock - we want to use cached response from backend
-        startThink(); 
-        ws.send(JSON.stringify({type:'solve'})); 
+      // Check if screenshot was taken
+      if (!hasScreenshot) {
+        log('[SOLVE] ❌ Rejected - No screenshot');
+        showError('Take a screenshot first', 'Press Ctrl+Shift+C to capture before solving');
+        return;
+      }
+      
+      if (ws?.readyState === 1) {
+        startThink();
+        ws.send(JSON.stringify({type:'solve'}));
+        log('[SOLVE] Request sent');
       }
     }
 
     document.getElementById('screenshot').addEventListener('click', capture);
     document.getElementById('solve').addEventListener('click', solve);
+    
     document.getElementById('start-over').addEventListener('click', () => {
-      shots = 0; 
-      cnt.textContent = 'Shots: 0'; 
-      hideResult(); // This also unlocks
+      shots = 0;
+      cnt.textContent = 'Shots: 0';
+      hideResult();
+      
+      // Reset screenshot state
+      hasScreenshot = false;
+      updateSolveButton();
+      log('[CLEAR] Screenshot state reset');
+      
       if (ws?.readyState === 1) ws.send(JSON.stringify({type:'clear'}));
     });
+
     document.getElementById('copy-result').addEventListener('click', () =>
       navigator.clipboard.writeText(document.getElementById('result-content').innerText));
+    
     document.getElementById('close-result').addEventListener('click', hideResult);
 
-    pill.addEventListener('click', () => { navbar.style.display = 'flex'; solve(); });
+    pill.addEventListener('click', () => {
+      navbar.style.display = 'flex';
+      solve();
+    });
 
+    // IPC listeners
     ipcRenderer.on('screenshot', capture);
     ipcRenderer.on('solve', solve);
     ipcRenderer.on('start-over', () => document.getElementById('start-over').click());
-    ipcRenderer.on('scroll-ai-result', (e, d) => { if (panel.style.display !== 'none') panel.scrollBy({top:d, behavior:'smooth'}); });
+    ipcRenderer.on('scroll-ai-result', (e, delta) => {
+      if (panel.style.display !== 'none') {
+        panel.scrollBy({top: delta, behavior: 'smooth'});
+      }
+    });
     
-    function getAlpha() { return Math.min(.95, Math.max(.1, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--overlay-alpha')||'.6'))); }
-    function setAlpha(v) { document.documentElement.style.setProperty('--overlay-alpha', String(Math.min(.95, Math.max(.1, v)))); }
-    ipcRenderer.on('set-transparency', (e, p) => {
+    function getAlpha() {
+      return Math.min(.95, Math.max(.1, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--overlay-alpha') || '.6')));
+    }
+    
+    function setAlpha(v) {
+      document.documentElement.style.setProperty('--overlay-alpha', String(Math.min(.95, Math.max(.1, v))));
+    }
+    
+    ipcRenderer.on('set-transparency', (e, payload) => {
       const cur = getAlpha();
-      if (p?.action==='inc') setAlpha(cur+.05); else if (p?.action==='dec') setAlpha(cur-.05); else if (typeof p?.value==='number') setAlpha(p.value);
+      if (payload?.action === 'inc') setAlpha(cur + .05);
+      else if (payload?.action === 'dec') setAlpha(cur - .05);
+      else if (typeof payload?.value === 'number') setAlpha(payload.value);
     });
 
     function escapeHtml(str) {
       return String(str)
-        .replace(/&/g, String.fromCharCode(38,97,109,112,59))
-        .replace(/</g, String.fromCharCode(38,108,116,59))
-        .replace(/>/g, String.fromCharCode(38,103,116,59));
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
     }
 
+    // Initialize
+    updateSolveButton();
     connect();
+    log('[INIT] Secure overlay initialized');
   </script>
 </body>
 </html>

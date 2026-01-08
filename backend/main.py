@@ -1,35 +1,52 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import json
-import asyncio
 import time
+import secrets
+import os
 from pydantic import BaseModel, ValidationError
+from dotenv import load_dotenv
 from screen.capture import ScreenCapture
 from audio.transcription import AudioTranscriber
 from ai.engine import AIEngine
 import logging
 
+# Load environment variables
+load_dotenv()
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# ------------------------------
+# ============================================
+# SECURITY: Authentication Token
+# ============================================
+AUTH_TOKEN = os.getenv("WS_AUTH_TOKEN")
+if not AUTH_TOKEN:
+    AUTH_TOKEN = secrets.token_urlsafe(32)
+    logging.warning(f"⚠️  No WS_AUTH_TOKEN in .env, generated: {AUTH_TOKEN}")
+    logging.warning(f"⚠️  Add to backend/.env: WS_AUTH_TOKEN={AUTH_TOKEN}")
+else:
+    logging.info("✓ WebSocket authentication enabled")
+
+# ============================================
 # Pydantic Schemas for Data Validation
-# ------------------------------
+# ============================================
 class AIResponse(BaseModel):
     explanation: str
     python_code: str
 
-# ------------------------------
-# Response Caching (CRITICAL FIX)
-# ------------------------------
+# ============================================
+# Response Caching & Screenshot Tracking
+# ============================================
 last_response_cache = None
 last_capture_time = 0
+last_screenshot_data = None
 CACHE_DURATION = 10  # seconds
 
-# ------------------------------
-# Helpers: Backend-side AI response validation and formatting
-# ------------------------------
+# ============================================
+# Helpers: Backend-side AI response validation
+# ============================================
 def _strip_code_fences(s: str) -> str:
     s = str(s or "")
     s = s.strip()
@@ -40,17 +57,14 @@ def _strip_code_fences(s: str) -> str:
     return s.strip()
 
 def validate_ai_response(raw_content: str) -> dict:
-    """
-    Validate and normalize AI output to a strict JSON schema using Pydantic.
-    If invalid or not JSON, attempt fallback extraction; if empty, return structured error.
-    """
+    """Validate and normalize AI output to a strict JSON schema using Pydantic."""
     try:
         data = json.loads(raw_content)
         validated_data = AIResponse(**data)
         validated_data.python_code = _strip_code_fences(validated_data.python_code)
         return validated_data.dict()
     except (ValidationError, json.JSONDecodeError) as e:
-        logging.warning(f"AI response validation failed: {e}. Raw content length: {len(raw_content)}")
+        logging.warning(f"AI response validation failed: {e}")
         import re
         
         code_match = re.search(r"```python[\s\S]*?```", raw_content) or re.search(r"```[\s\S]*?```", raw_content)
@@ -75,12 +89,15 @@ def validate_ai_response(raw_content: str) -> dict:
             }
         return {"explanation": explanation, "python_code": code}
 
-app = FastAPI(title="UltraCode Clone Backend")
+# ============================================
+# FastAPI App
+# ============================================
+app = FastAPI(title="UltraCode Clone Backend - Secured")
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,177 +124,170 @@ async def status():
     }
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
+    """Secure WebSocket endpoint with authentication and screenshot validation"""
+    
+    # SECURITY: Validate token before accepting connection
+    if token != AUTH_TOKEN:
+        logging.warning(f"⚠️  Unauthorized WebSocket connection attempt")
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+    
     await websocket.accept()
     active_connections.append(websocket)
-    print("[WS] Client connected")
+    logging.info(f"✓ Authenticated client connected")
     
-    global last_response_cache, last_capture_time
+    global last_response_cache, last_capture_time, last_screenshot_data
     
     try:
         while True:
             data = await websocket.receive_text()
             command = json.loads(data)
-            print(f"[WS] Received command: {command}")
+            logging.info(f"[WS] Received command: {command['type']}")
             
             if command["type"] == "capture":
-                print("[SHOT] Starting capture: screen + audio")
-                screen_text = screen_capture.capture_and_extract_text()
-                print(f"[SHOT] Screen text length: {len(screen_text)}")
-                audio_text = audio_transcriber.get_transcription()
-                print(f"[AUDIO] Transcript length: {len(audio_text)}")
-                
-                print("[AI] Processing begins")
-                raw_response = ai_engine.process(screen_text, audio_text)
-                response = validate_ai_response(raw_response)
-                print("[AI] Processing complete")
-                
-                # CRITICAL: Cache the response
-                last_response_cache = {
-                    "screen_text": screen_text,
-                    "audio_text": audio_text,
-                    "ai_response": response
-                }
-                last_capture_time = time.time()
-                print(f"[CACHE] Response cached at {last_capture_time}")
-                
-                payload = {
-                    "type": "response",
-                    "data": last_response_cache
-                }
-                await websocket.send_json(payload)
-                print("[WS] Response sent to client")
-                
-            elif command["type"] == "solve":
-                print("[SOLVE] Requested")
-                
-                current_time = time.time()
-                time_since_capture = current_time - last_capture_time
-                
-                # CRITICAL: Use cached response if available and recent
-                if last_response_cache and time_since_capture < CACHE_DURATION:
-                    print(f"[SOLVE] Using cached response from {time_since_capture:.1f}s ago")
-                    payload = {
-                        "type": "response",
-                        "data": last_response_cache
-                    }
-                    await websocket.send_json(payload)
-                    print("[WS] Cached response sent to client")
-                else:
-                    # Cache is old or doesn't exist, do fresh capture
-                    if last_response_cache:
-                        print(f"[SOLVE] Cache expired ({time_since_capture:.1f}s old), capturing fresh context")
-                    else:
-                        print("[SOLVE] No cache available, capturing fresh context")
-                    
+                logging.info("[CAPTURE] Starting screen + audio capture")
+                try:
                     screen_text = screen_capture.capture_and_extract_text()
+                    logging.info(f"[CAPTURE] Screen text: {len(screen_text)} chars")
                     audio_text = audio_transcriber.get_transcription()
-                    print(f"[SOLVE] Context: screen={len(screen_text)} chars, audio={len(audio_text)} chars")
-
-                    print("[AI] Processing begins")
+                    logging.info(f"[CAPTURE] Audio text: {len(audio_text)} chars")
+                    
+                    # Store screenshot data
+                    current_time = time.time()
+                    last_screenshot_data = {
+                        "screen_text": screen_text,
+                        "audio_text": audio_text,
+                        "timestamp": current_time
+                    }
+                    
+                    logging.info("[AI] Processing analysis")
                     raw_response = ai_engine.process(screen_text, audio_text)
                     response = validate_ai_response(raw_response)
-                    print("[AI] Processing complete")
+                    logging.info("[AI] Analysis complete")
                     
-                    # Update cache
+                    # Cache the response
                     last_response_cache = {
                         "screen_text": screen_text,
                         "audio_text": audio_text,
                         "ai_response": response
                     }
                     last_capture_time = current_time
-                    print(f"[CACHE] Response cached at {last_capture_time}")
-
+                    
                     payload = {
                         "type": "response",
                         "data": last_response_cache
                     }
                     await websocket.send_json(payload)
-                    print("[WS] Fresh solve response sent to client")
+                    logging.info("[WS] Response sent")
+                    
+                except Exception as e:
+                    logging.error(f"[CAPTURE] Error: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Capture failed",
+                        "details": "Please try again"
+                    })
+                    
+            elif command["type"] == "solve":
+                # CRITICAL: Check if screenshot was taken
+                if not last_screenshot_data:
+                    logging.warning("[SOLVE] Rejected - No screenshot taken")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Take a screenshot first",
+                        "details": "Press Ctrl+Shift+C to capture before solving"
+                    })
+                    continue
+                
+                # Check if screenshot is too old (more than 5 minutes)
+                current_time = time.time()
+                screenshot_age = current_time - last_screenshot_data.get("timestamp", 0)
+                if screenshot_age > 300:  # 5 minutes
+                    logging.warning(f"[SOLVE] Screenshot too old ({screenshot_age:.0f}s)")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Screenshot expired",
+                        "details": "Take a new screenshot (Ctrl+Shift+C)"
+                    })
+                    continue
+                
+                logging.info("[SOLVE] Requested")
+                
+                # Use cached response if available and recent
+                time_since_capture = current_time - last_capture_time
+                
+                if last_response_cache and time_since_capture < CACHE_DURATION:
+                    logging.info(f"[SOLVE] Using cached response ({time_since_capture:.1f}s old)")
+                    payload = {
+                        "type": "response",
+                        "data": last_response_cache
+                    }
+                    await websocket.send_json(payload)
+                else:
+                    # Use screenshot data for fresh analysis
+                    logging.info("[SOLVE] Generating fresh analysis from screenshot")
+                    try:
+                        raw_response = ai_engine.process(
+                            last_screenshot_data["screen_text"],
+                            last_screenshot_data["audio_text"]
+                        )
+                        response = validate_ai_response(raw_response)
+                        
+                        last_response_cache = {
+                            "screen_text": last_screenshot_data["screen_text"],
+                            "audio_text": last_screenshot_data["audio_text"],
+                            "ai_response": response
+                        }
+                        last_capture_time = current_time
+                        
+                        payload = {
+                            "type": "response",
+                            "data": last_response_cache
+                        }
+                        await websocket.send_json(payload)
+                        logging.info("[WS] Fresh response sent")
+                    except Exception as e:
+                        logging.error(f"[SOLVE] Error: {e}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Analysis failed",
+                            "details": "Please try again"
+                        })
                     
             elif command["type"] == "clear":
-                print("[WS] Clear requested; resetting cache")
+                logging.info("[CLEAR] Resetting state")
                 last_response_cache = None
                 last_capture_time = 0
+                last_screenshot_data = None
                 await websocket.send_json({"type": "cleared"})
             
             elif command["type"] == "stop":
-                print("[WS] Stop requested; closing connection")
+                logging.info("[STOP] Closing connection")
                 break
                 
     except WebSocketDisconnect:
-        print("[WS] Client disconnected")
-        if websocket in active_connections:
-            active_connections.remove(websocket)
+        logging.info(f"Client disconnected")
     except Exception as e:
-        print(f"[ERROR] {e}")
-        error_message = str(e)
-        
-        if "API key" in error_message or "api_key" in error_message:
-            detailed_error = {
+        logging.error(f"WebSocket error: {e}", exc_info=True)
+        try:
+            await websocket.send_json({
                 "type": "error",
-                "message": "AI Service Configuration Error",
-                "details": "The AI service API key is not configured properly.",
-                "resolution": [
-                    "1. Open backend/.env file",
-                    "2. Add your API key: OPENAI_API_KEY=your_key_here or OPENROUTER_API_KEY=your_key_here",
-                    "3. Restart the backend server",
-                    "4. Get an API key from: https://platform.openai.com/api-keys or https://openrouter.ai/keys"
-                ]
-            }
-        elif "tesseract" in error_message.lower():
-            detailed_error = {
-                "type": "error", 
-                "message": "OCR Configuration Error",
-                "details": "Tesseract OCR is not properly installed or configured.",
-                "resolution": [
-                    "1. Install Tesseract OCR: https://github.com/UB-Mannheim/tesseract/wiki",
-                    "2. Add Tesseract to your system PATH",
-                    "3. Or install via package manager: pip install pytesseract",
-                    "4. Restart the application after installation"
-                ]
-            }
-        elif "audio" in error_message.lower() or "soundcard" in error_message.lower():
-            detailed_error = {
-                "type": "error",
-                "message": "Audio System Error", 
-                "details": "There was an issue with audio capture or processing.",
-                "resolution": [
-                    "1. Check if your microphone is connected and enabled",
-                    "2. Ensure audio permissions are granted to the application",
-                    "3. Try restarting your audio device",
-                    "4. Check Windows audio settings"
-                ]
-            }
-        elif "websocket" in error_message.lower():
-            detailed_error = {
-                "type": "error",
-                "message": "Connection Error",
-                "details": "There was a connection issue with the frontend.",
-                "resolution": [
-                    "1. Check if the frontend is running",
-                    "2. Verify the WebSocket connection on port 8000",
-                    "3. Restart both frontend and backend",
-                    "4. Check firewall settings"
-                ]
-            }
-        else:
-            detailed_error = {
-                "type": "error", 
-                "message": "Application Error",
-                "details": error_message,
-                "resolution": [
-                    "1. Check the application logs for more details",
-                    "2. Try restarting the application",
-                    "3. Ensure all dependencies are properly installed",
-                    "4. Check the GitHub repository for known issues"
-                ]
-            }
-        
-        await websocket.send_json(detailed_error)
+                "message": "Connection error",
+                "details": "Please reconnect"
+            })
+        except:
+            pass
+    finally:
         if websocket in active_connections:
             active_connections.remove(websocket)
+        logging.info(f"Connection closed. Active: {len(active_connections)}")
 
 if __name__ == "__main__":
-    print("[SERVER] UltraCode backend starting on 127.0.0.1:8000")
+    print("="*50)
+    print("UltraCode Secure Backend Starting")
+    print("="*50)
+    print(f"WebSocket Auth Token: {AUTH_TOKEN}")
+    print(f"Add this to frontend: WS_AUTH_TOKEN={AUTH_TOKEN}")
+    print("="*50)
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

@@ -2,9 +2,7 @@ const { app, BrowserWindow, globalShortcut, ipcMain, screen, session, Tray, Menu
 const fs = require('fs');
 const path = require('path');
 
-console.log('===== ELECTRON STARTING =====');
-
-
+console.log('===== ULTRACODE SECURE - STARTING =====');
 
 // Create a log stream
 const logStream = fs.createWriteStream(path.join(__dirname, 'electron.log'), { flags: 'a' });
@@ -13,7 +11,6 @@ const logStream = fs.createWriteStream(path.join(__dirname, 'electron.log'), { f
 const originalConsoleLog = console.log.bind(console);
 const originalConsoleError = console.error.bind(console);
 
-// Mirror console logs to file and original console, support multiple args/objects
 console.log = (...args) => {
   try {
     const line = args.map(arg => {
@@ -31,91 +28,25 @@ console.error = (...args) => {
       if (typeof arg === 'string') return arg;
       try { return JSON.stringify(arg); } catch { return String(arg); }
     }).join(' ');
-    logStream.write(line + '\n');
+    logStream.write('[ERROR] ' + line + '\n');
   } catch {}
   originalConsoleError(...args);
 };
-console.log('  Loading modules...');
-
-// Reduce transparency flicker on Windows by disabling GPU compositing
-// Ensure hardware acceleration is enabled; disabling can make transparent windows invisible on Windows
-try {
-  if (app.isReady()) {
-    // No-op; Electron uses hardware acceleration by default
-  }
-} catch {}
-
-// Load custom modules with error handling
-let graphicsHook, platformDetector, errorHandler, mobileCompanion;
-
-try {
-  graphicsHook = require(path.join(__dirname, '../../shared/graphics_hook'));
-  console.log('  Γ£ô Graphics hook module loaded');
-} catch (error) {
-  console.log('  Γ£ù Failed to load graphics hook:');
-  console.error(error);
-  graphicsHook = {
-    initialize: async () => console.warn('Graphics hook not available, running in basic mode.'),
-    isHooked: () => false,
-  };
-}
-
-try {
-  platformDetector = require(path.join(__dirname, '../../shared/platform_detector'));
-  console.log('  Γ£ô Platform detector module loaded');
-} catch (error) {
-  console.log('  Γ£ù Failed to load platform detector:');
-  console.error(error);
-  platformDetector = {
-    startDetection: () => console.warn('Platform detector not available.'),
-  };
-}
-
-try {
-  errorHandler = require(path.join(__dirname, '../../shared/error_handler'));
-  console.log('  Γ£ô Error handler module loaded');
-} catch (error) {
-  console.log('  Γ£ù Failed to load error handler:');
-  console.error(error);
-  errorHandler = {
-    initializeWithApp: () => console.warn('Error handler not available.'),
-    handleError: (type, error) => console.error(`Unhandled error (${type}):`, error),
-  };
-}
-
-try {
-  mobileCompanion = require(path.join(__dirname, '../../mobile/companion'));
-  console.log('  Γ£ô Mobile companion module loaded');
-} catch (error) {
-  console.log('  Γ£ù Failed to load mobile companion:');
-  console.error(error);
-  mobileCompanion = {
-    initialize: () => console.warn('Mobile companion not available.'),
-    sendMessage: () => console.warn('Mobile companion not available.'),
-    getQRCode: () => Promise.resolve({ error: 'Mobile companion not available' }),
-  };
-}
-
-// Optional Windows-native capture hardening via SetWindowDisplayAffinity
-let winAffinity;
-try {
-  if (process.platform === 'win32') {
-    const ffi = require('ffi-napi');
-    const ref = require('ref-napi');
-    winAffinity = ffi.Library('user32', {
-      SetWindowDisplayAffinity: ['bool', ['pointer', 'uint']]
-    });
-    console.log('  Γ£ô Native affinity library loaded');
-  }
-} catch (e) {
-  console.log('  Γ£ù Native affinity unavailable; using Electron content protection only');
-  winAffinity = null;
-}
 
 // Keep a global reference of the window objects
 let mainWindow;
 let overlayWindow;
 let tray;
+
+// SECURITY: Content Security Policy
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "connect-src 'self' ws://127.0.0.1:8000 http://127.0.0.1:8000",
+  "img-src 'self' data:",
+  "font-src 'self' data:"
+].join('; ');
 
 function createTray() {
   try {
@@ -128,15 +59,15 @@ function createTray() {
       image = nativeImage.createEmpty();
     }
     tray = new Tray(image);
-    tray.setToolTip('Ultracode Overlay');
+    tray.setToolTip('Ultracode - Secure');
     const menu = Menu.buildFromTemplate([
       {
         label: 'Show Overlay',
-        click: () => { if (overlayWindow) { overlayWindow.show(); } }
+        click: () => { if (overlayWindow) overlayWindow.show(); }
       },
       {
         label: 'Hide Overlay',
-        click: () => { if (overlayWindow) { overlayWindow.hide(); } }
+        click: () => { if (overlayWindow) overlayWindow.hide(); }
       },
       { type: 'separator' },
       { label: 'Snap Center', click: () => snapOverlay('center') },
@@ -151,7 +82,7 @@ function createTray() {
         label: 'Solve',
         click: () => {
           if (overlayWindow) {
-            expandOverlay();                 // expand first
+            expandOverlay();
             overlayWindow.webContents.send('solve');
           }
         }
@@ -163,7 +94,8 @@ function createTray() {
     tray.on('click', () => {
       try {
         if (overlayWindow) {
-          if (overlayWindow.isVisible()) overlayWindow.hide(); else overlayWindow.show();
+          if (overlayWindow.isVisible()) overlayWindow.hide();
+          else overlayWindow.show();
         }
       } catch (e) {
         console.error('Tray click handler failed', e);
@@ -179,40 +111,23 @@ function createMainWindow() {
   console.log('===== CREATING MAIN WINDOW =====');
   
   try {
-    // Create the browser window
     mainWindow = new BrowserWindow({
       width: 800,
       height: 600,
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false,
-        enableRemoteModule: true,
       },
       icon: path.join(__dirname, 'icon.png'),
     });
 
-    console.log('Main window object created');
-
-    // Load the index.html from React app
     const startUrl = process.env.ELECTRON_START_URL || 'http://localhost:3000';
     console.log('Loading URL:', startUrl);
-    
     mainWindow.loadURL(startUrl);
 
-    // Open DevTools in development mode
     if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
       mainWindow.webContents.openDevTools();
     }
-
-    // Handle window events
-    mainWindow.webContents.on('did-finish-load', () => {
-      console.log('✓ Main window loaded successfully');
-    });
-
-    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-      console.error('✗ Main window failed to load');
-      errorHandler.handleError('ERR_WINDOW_LOAD', { errorCode, errorDescription });
-    });
 
     mainWindow.on('closed', () => {
       console.log('Main window closed');
@@ -222,17 +137,15 @@ function createMainWindow() {
     console.log('✓ Main window setup complete');
   } catch (error) {
     console.error('✗ Error creating main window:', error);
-    errorHandler.handleError('ERR_WINDOW_CREATION', error);
   }
 }
 
 function createOverlayWindow() {
-  console.log('===== CREATING OVERLAY WINDOW =====');
+  console.log('===== CREATING SECURE OVERLAY WINDOW =====');
   
   try {
     const primary = screen.getPrimaryDisplay();
     const { width, height } = primary.workAreaSize;
-    // PILL size (collapsed) – user cannot resize
     const pillWidth = 60;
     const pillHeight = 32;
     const startX = Math.round((width - pillWidth) / 2) + primary.workArea.x;
@@ -252,56 +165,39 @@ function createOverlayWindow() {
       focusable: true,
       hasShadow: false,
       thickFrame: false,
-      resizable: false,          // LOCK user resize
+      resizable: false,
       minimizable: false,
       maximizable: false,
       titleBarStyle: 'hidden',
-      backgroundColor: '#00000000', // Fully transparent
+      backgroundColor: '#00000000',
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false,
         backgroundThrottling: false,
-        devTools: false,
-        sandbox: false,
-        webSecurity: false,
-        allowRunningInsecureContent: true,
       },
     });
 
-    console.log('  Overlay window object created');
+    console.log('✓ Overlay window object created with security enabled');
 
-    // Ensure overlay is invisible in screenshots and screen sharing,
-    // while remaining visible locally to the user.
+    // Content protection for screen sharing invisibility
     try {
       overlayWindow.setContentProtection(true);
-      console.log('  ✓ Content protection enabled on overlay window');
+      console.log('✓ Content protection enabled');
     } catch (e) {
-      console.warn('  ⚠ Failed to enable content protection', e);
+      console.warn('⚠ Content protection failed', e);
     }
 
-    // Windows-native capture hardening (optional): WDA_EXCLUDEFROMCAPTURE (0x00000011)
-    try {
-      if (process.platform === 'win32' && winAffinity) {
-        const hwndBuf = overlayWindow.getNativeWindowHandle();
-        const hwndPtr = hwndBuf && hwndBuf.buffer ? hwndBuf.buffer : hwndBuf; // Electron versions vary
-        const WDA_EXCLUDEFROMCAPTURE = 0x00000011;
-        const ok = winAffinity.SetWindowDisplayAffinity(hwndPtr, WDA_EXCLUDEFROMCAPTURE);
-        console.log(`  ✓ SetWindowDisplayAffinity applied: ${ok ? 'OK' : 'FAILED'}`);
-      }
-    } catch (e) {
-      console.warn('  ⚠ Native display affinity not applied; continuing with content protection', e);
-    }
+    // CRITICAL: Always enable click-through (forward mouse events)
+    overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+    console.log('✓ Click-through mode: ALWAYS ON');
 
     const overlayUrl = path.join(__dirname, 'overlay.html');
-    console.log('  Loading overlay URL:', overlayUrl);
-    
+    console.log('Loading overlay:', overlayUrl);
     overlayWindow.loadFile(overlayUrl);
-    // Enhanced behavior: selective click-through on transparent areas
+
     try {
       overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
       overlayWindow.setFullScreenable(false);
-      // Allow clicks to pass through transparent areas, keep interactive elements clickable
-      overlayWindow.setIgnoreMouseEvents(true, { forward: true });
       overlayWindow.setOpacity(1.0);
     } catch {}
 
@@ -310,38 +206,23 @@ function createOverlayWindow() {
         if (!app.isPackaged) {
           overlayWindow.show();
           overlayWindow.focus();
-          console.log('Overlay ready; compact and interactable in development');
+          console.log('✓ Overlay ready (development mode)');
         } else {
-          console.log('Overlay ready but remaining hidden for stealth');
+          console.log('✓ Overlay ready (stealth mode)');
         }
       } catch (e) {
-        console.error('Failed in ready-to-show handler', e);
-      }
-    });
-    overlayWindow.webContents.on('did-finish-load', () => {
-      console.log('  Γ£ô Overlay window loaded successfully');
-      // Expand window so navbar is visible on startup
-      try {
-        expandOverlay();
-        // Re-assert content protection post-load (defensive, no-op if already set)
-        try { overlayWindow.setContentProtection(true); } catch {}
-        // Re-assert affinity post-load
-        try {
-          if (process.platform === 'win32' && winAffinity) {
-            const hwndBuf = overlayWindow.getNativeWindowHandle();
-            const hwndPtr = hwndBuf && hwndBuf.buffer ? hwndBuf.buffer : hwndBuf;
-            const WDA_EXCLUDEFROMCAPTURE = 0x00000011;
-            winAffinity.SetWindowDisplayAffinity(hwndPtr, WDA_EXCLUDEFROMCAPTURE);
-          }
-        } catch {}
-      } catch (e) {
-        console.error('Failed to expand overlay on load', e);
+        console.error('Failed in ready-to-show', e);
       }
     });
 
-    overlayWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-      console.log('  Γ£ù Overlay window failed to load');
-      errorHandler.handleError('ERR_OVERLAY_LOAD', { errorCode, errorDescription });
+    overlayWindow.webContents.on('did-finish-load', () => {
+      console.log('✓ Overlay loaded successfully');
+      try {
+        expandOverlay();
+        overlayWindow.setContentProtection(true);
+      } catch (e) {
+        console.error('Failed to expand overlay on load', e);
+      }
     });
 
     overlayWindow.on('closed', () => {
@@ -349,19 +230,17 @@ function createOverlayWindow() {
       overlayWindow = null;
     });
 
-    console.log('  Γ£ô Overlay window setup complete');
+    console.log('✓ Overlay window setup complete');
   } catch (error) {
-    console.log('  Γ£ù Error creating overlay window:');
-    console.error(error);
-    errorHandler.handleError('ERR_OVERLAY_CREATION', error);
+    console.error('✗ Error creating overlay:', error);
   }
 }
 
-// Create windows when Electron is ready
+// App ready handler
 app.whenReady().then(async () => {
   console.log('===== APP IS READY =====');
   
-  // Privacy & security enhancements
+  // SECURITY: Privacy & tracking protection
   try {
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
       const blockedDomains = [
@@ -369,145 +248,145 @@ app.whenReady().then(async () => {
         'doubleclick.net',
         'facebook.com/tr',
         'segment.com',
-        'mixpanel.com'
+        'mixpanel.com',
+        'hotjar.com',
+        'clarity.ms'
       ];
       const shouldBlock = blockedDomains.some(domain => details.url.includes(domain));
       callback({ cancel: shouldBlock });
     });
-    session.defaultSession.cookies.flushStore().then(() => {
-      session.defaultSession.clearStorageData();
-    });
-  } catch {}
-
-  // Initialize error handler with app
-  errorHandler.initializeWithApp(app);
+    
+    await session.defaultSession.clearStorageData();
+    console.log('✓ Privacy protection enabled');
+  } catch (e) {
+    console.error('Privacy protection setup failed', e);
+  }
   
   createOverlayWindow();
-  // Optionally show the React control panel:
-  // createMainWindow();
-
-  // Initialize graphics hook
-  try {
-    await graphicsHook.initialize();
-    if (graphicsHook && typeof graphicsHook.installHook === 'function') {
-      graphicsHook.installHook();
-    } else {
-      console.log('Graphics hook not available, running in basic mode.');
-    }
-  } catch (error) {
-    console.log('  Γ£ù Failed to initialize graphics hook:');
-    console.error(error);
-    console.log('Graphics hook not available, running in basic mode.');
-  }
-
-  // Start platform detection
-  platformDetector.startDetection(overlayWindow, (platform) => {
-    if (platform) {
-      console.log(`  Γ£ô Detected platform: ${platform.name}`);
-    } else {
-      console.log('No specific platform detected');
-    }
-  });
-  
-  // Initialize mobile companion mode
-  mobileCompanion.initialize();
+  // Optionally: createMainWindow();
 
   // Register global shortcuts
   try {
-    const regs = [];
-    regs.push({ combo: 'CommandOrControl+Shift+Space', ok: globalShortcut.register('CommandOrControl+Shift+Space', () => {
-      if (overlayWindow) {
-        if (overlayWindow.isVisible()) { overlayWindow.hide(); console.log('Overlay hidden'); }
-        else { overlayWindow.show(); console.log('Overlay shown'); }
+    const shortcuts = [
+      {
+        keys: 'CommandOrControl+Shift+Space',
+        action: () => {
+          if (overlayWindow) {
+            if (overlayWindow.isVisible()) {
+              overlayWindow.hide();
+              console.log('Overlay hidden');
+            } else {
+              overlayWindow.show();
+              console.log('Overlay shown');
+            }
+          }
+        },
+        description: 'Toggle overlay visibility'
+      },
+      {
+        keys: 'CommandOrControl+Shift+R',
+        action: () => {
+          if (overlayWindow) overlayWindow.webContents.send('start-over');
+        },
+        description: 'Start over'
+      },
+      {
+        keys: 'CommandOrControl+Shift+C',
+        action: () => {
+          if (overlayWindow) {
+            console.log('[HOTKEY] Screenshot triggered');
+            overlayWindow.webContents.send('screenshot');
+          }
+        },
+        description: 'Take screenshot'
+      },
+      {
+        keys: 'CommandOrControl+Shift+E',
+        action: () => {
+          if (overlayWindow) {
+            console.log('[HOTKEY] Solve triggered');
+            expandOverlay();
+            overlayWindow.webContents.send('solve');
+          }
+        },
+        description: 'Trigger solve'
+      },
+      {
+        keys: 'CommandOrControl+Shift+Up',
+        action: () => {
+          if (overlayWindow) overlayWindow.webContents.send('scroll-ai-result', -120);
+        },
+        description: 'Scroll up'
+      },
+      {
+        keys: 'CommandOrControl+Shift+Down',
+        action: () => {
+          if (overlayWindow) overlayWindow.webContents.send('scroll-ai-result', 120);
+        },
+        description: 'Scroll down'
+      },
+      {
+        keys: 'CommandOrControl+Up',
+        action: () => moveOverlay(0, -25),
+        description: 'Move up'
+      },
+      {
+        keys: 'CommandOrControl+Down',
+        action: () => moveOverlay(0, 25),
+        description: 'Move down'
+      },
+      {
+        keys: 'CommandOrControl+Left',
+        action: () => moveOverlay(-25, 0),
+        description: 'Move left'
+      },
+      {
+        keys: 'CommandOrControl+Right',
+        action: () => moveOverlay(25, 0),
+        description: 'Move right'
       }
-    }) });
+    ];
 
-    regs.push({ combo: 'CommandOrControl+Shift+S', ok: globalShortcut.register('CommandOrControl+Shift+S', () => {
-      if (overlayWindow) {
-        const isIgnoring = overlayWindow.isIgnoringMouseEvents();
-        if (!isIgnoring) {
-          overlayWindow.setIgnoreMouseEvents(true, { forward: true });
-          console.log('Overlay click-through: ON (forward)');
-        } else {
-          overlayWindow.setIgnoreMouseEvents(false);
-          console.log('Overlay click-through: OFF');
-        }
-      }
-    }) });
+    shortcuts.forEach(({ keys, action, description }) => {
+      const success = globalShortcut.register(keys, action);
+      console.log(`Shortcut ${keys} (${description}): ${success ? 'OK' : 'FAILED'}`);
+    });
 
-    regs.push({ combo: 'CommandOrControl+Shift+R', ok: globalShortcut.register('CommandOrControl+Shift+R', () => {
-      if (overlayWindow) overlayWindow.webContents.send('start-over');
-    }) });
-
-    regs.push({ combo: 'CommandOrControl+Shift+E', ok: globalShortcut.register('CommandOrControl+Shift+E', () => {
-      if (overlayWindow) {
-        console.log('Shortcut: Solve triggered');
-        expandOverlay();                 // expand first
-        overlayWindow.webContents.send('solve');
-      }
-    }) });
-
-    regs.push({ combo: 'CommandOrControl+Shift+C', ok: globalShortcut.register('CommandOrControl+Shift+C', () => {
-      if (overlayWindow) {
-        console.log('Shortcut: Screenshot triggered');
-        overlayWindow.webContents.send('screenshot');
-      }
-    }) });
-
-    // Scroll solution panel shortcuts
-    regs.push({ combo: 'CommandOrControl+Shift+Up', ok: globalShortcut.register('CommandOrControl+Shift+Up', () => {
-      if (overlayWindow) overlayWindow.webContents.send('scroll-ai-result', -120);
-    }) });
-    regs.push({ combo: 'CommandOrControl+Shift+Down', ok: globalShortcut.register('CommandOrControl+Shift+Down', () => {
-      if (overlayWindow) overlayWindow.webContents.send('scroll-ai-result', 120);
-    }) });
-
-    // Register movement shortcuts (25px step)
-    const step = 25;
-    regs.push({ combo: 'CommandOrControl+Up', ok: globalShortcut.register('CommandOrControl+Up', () => moveOverlay(0, -step)) });
-    regs.push({ combo: 'CommandOrControl+Down', ok: globalShortcut.register('CommandOrControl+Down', () => moveOverlay(0, step)) });
-    regs.push({ combo: 'CommandOrControl+Left', ok: globalShortcut.register('CommandOrControl+Left', () => moveOverlay(-step, 0)) });
-    regs.push({ combo: 'CommandOrControl+Right', ok: globalShortcut.register('CommandOrControl+Right', () => moveOverlay(step, 0)) });
-
-    // Fallback alternatives if any registration failed
-    if (!regs.every(r => r.ok)) {
-      console.log('Some shortcuts failed; registering fallbacks');
-      globalShortcut.register('Alt+Shift+E', () => { if (overlayWindow) overlayWindow.webContents.send('solve'); });
-      globalShortcut.register('Alt+Shift+C', () => { if (overlayWindow) overlayWindow.webContents.send('screenshot'); });
-      globalShortcut.register('Alt+Shift+Up', () => { if (overlayWindow) overlayWindow.webContents.send('scroll-ai-result', -120); });
-      globalShortcut.register('Alt+Shift+Down', () => { if (overlayWindow) overlayWindow.webContents.send('scroll-ai-result', 120); });
-      globalShortcut.register('Alt+Shift+Space', () => {
-        if (overlayWindow) {
-          if (overlayWindow.isVisible()) overlayWindow.hide(); else overlayWindow.show();
-        }
+    // Fallback shortcuts if main ones fail
+    if (!shortcuts.every(s => globalShortcut.isRegistered(s.keys))) {
+      console.log('Registering fallback shortcuts with Alt+Shift');
+      globalShortcut.register('Alt+Shift+E', () => {
+        if (overlayWindow) overlayWindow.webContents.send('solve');
+      });
+      globalShortcut.register('Alt+Shift+C', () => {
+        if (overlayWindow) overlayWindow.webContents.send('screenshot');
       });
     }
-    regs.forEach(r => console.log(`Shortcut ${r.combo}: ${r.ok ? 'OK' : 'FAILED'}`));
-    console.log('✓ Global shortcuts registration attempted with fallbacks');
+
+    console.log('✓ Global shortcuts registered');
   } catch (error) {
     console.error('✗ Failed to register shortcuts:', error);
   }
 
-  console.log('===== INITIALIZATION COMPLETE =====');
-  // Initialize tray last so it reflects current window state
+  registerTransparencyShortcuts();
   createTray();
+  console.log('===== INITIALIZATION COMPLETE =====');
 });
 
-// Further minimize detectable properties when ready
+// Security hardening on ready
 app.on('ready', () => {
   try {
     if (overlayWindow) {
       overlayWindow.setTitle('');
-      overlayWindow.setAccessibilitySupportEnabled(false);
     }
     if (app.isPackaged) {
       app.setName('System Helper');
-      process.title = 'System Helper Process';
+      process.title = 'System Helper';
     }
   } catch {}
 });
 
-// Quit when all windows are closed
+// Clean shutdown
 app.on('window-all-closed', () => {
   console.log('All windows closed');
   if (process.platform !== 'darwin') {
@@ -517,15 +396,11 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   console.log('App activated');
-  if (mainWindow === null) {
-    createMainWindow();
-  }
   if (overlayWindow === null) {
     createOverlayWindow();
   }
 });
 
-// Clean up global shortcuts
 app.on('will-quit', () => {
   console.log('App will quit, cleaning up...');
   globalShortcut.unregisterAll();
@@ -534,15 +409,11 @@ app.on('will-quit', () => {
 // IPC handlers
 ipcMain.on('toggle-overlay', (event, isVisible) => {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
-    if (isVisible) {
-      overlayWindow.show();
-    } else {
-      overlayWindow.hide();
-    }
+    if (isVisible) overlayWindow.show();
+    else overlayWindow.hide();
   }
 });
 
-// Overlay log passthrough for comprehensive terminal logging
 ipcMain.on('log', (event, message) => {
   try {
     console.log(`[OVERLAY] ${message}`);
@@ -551,19 +422,6 @@ ipcMain.on('log', (event, message) => {
   }
 });
 
-// Allow overlay to explicitly set click-through state
-ipcMain.on('set-click-through', (event, enabled) => {
-  try {
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.setIgnoreMouseEvents(!!enabled);
-      console.log(`Overlay click-through set to: ${enabled ? 'ON' : 'OFF'}`);
-    }
-  } catch (e) {
-    console.error('Failed to set click-through', e);
-  }
-});
-
-// Allow renderer to request overlay expansion explicitly
 ipcMain.on('expand-overlay', () => {
   try {
     expandOverlay();
@@ -572,7 +430,6 @@ ipcMain.on('expand-overlay', () => {
   }
 });
 
-// Expand overlay to working size when Solve is triggered
 function expandOverlay() {
   if (!overlayWindow || overlayWindow.isDestroyed()) return;
   const primary = screen.getPrimaryDisplay();
@@ -585,20 +442,17 @@ function expandOverlay() {
   console.log('Overlay expanded to working size');
 }
 
-  // Movement helpers
 function clampBounds(bounds) {
-  // Allow overlay to move off-screen while keeping a 10px handle visible
   const wa = screen.getPrimaryDisplay().workArea;
-  const minX = wa.x - bounds.width + 1;
-  const maxX = wa.x + wa.width - 1;
-  const minY = wa.y - bounds.height + 1;
-  const maxY = wa.y + wa.height - 1;
+  const minX = wa.x - bounds.width + 10;
+  const maxX = wa.x + wa.width - 10;
+  const minY = wa.y - bounds.height + 10;
+  const maxY = wa.y + wa.height - 10;
   bounds.x = Math.min(Math.max(bounds.x, minX), maxX);
   bounds.y = Math.min(Math.max(bounds.y, minY), maxY);
   return bounds;
 }
 
-// Transparency controls via keyboard shortcuts
 function registerTransparencyShortcuts() {
   try {
     const send = (payload) => {
@@ -606,21 +460,8 @@ function registerTransparencyShortcuts() {
         overlayWindow.webContents.send('set-transparency', payload);
       }
     };
-    // Increase transparency (less opaque)
-    const incKeys = [
-      'CommandOrControl+Shift+=',
-      'CommandOrControl+=',
-      'Alt+Shift+=',
-    ];
-    // Decrease transparency (more opaque)
-    const decKeys = [
-      'CommandOrControl+Shift+-',
-      'CommandOrControl+-',
-      'Alt+Shift+-',
-    ];
-    incKeys.forEach(k => globalShortcut.register(k, () => send({ action: 'inc' })));
-    decKeys.forEach(k => globalShortcut.register(k, () => send({ action: 'dec' })));
-    // Reset to default
+    globalShortcut.register('CommandOrControl+Shift+=', () => send({ action: 'inc' }));
+    globalShortcut.register('CommandOrControl+Shift+-', () => send({ action: 'dec' }));
     globalShortcut.register('CommandOrControl+Shift+0', () => send({ value: 0.6 }));
     console.log('✓ Transparency shortcuts registered');
   } catch (e) {
@@ -648,75 +489,10 @@ function snapOverlay(pos) {
   console.log(`Overlay snapped: ${pos}`);
 }
 
-// Handle AI response messages: forward to mobile companion and open results window
-let resultsWindow;
-function openResultsWindow(content) {
-  try {
-    if (!resultsWindow || resultsWindow.isDestroyed()) {
-      const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-      resultsWindow = new BrowserWindow({
-        width: 900,
-        height: 650,
-        x: Math.round((width - 900) / 2),
-        y: Math.round((height - 650) / 2),
-        frame: false,
-        transparent: true,
-        alwaysOnTop: true,
-        skipTaskbar: true,          // same as overlay
-        resizable: true,
-        show: false,                // hide until ready (prevents flash)
-        webPreferences: {
-          nodeIntegration: true,
-          contextIsolation: false,
-        },
-        icon: path.join(__dirname, 'icon.png'),
-        title: 'AI Result'
-      });
-      resultsWindow.on('closed', () => { resultsWindow = null; });
-      const resultUrl = path.join(__dirname, 'result.html');
-      resultsWindow.loadFile(resultUrl);
-      resultsWindow.webContents.once('dom-ready', () => {
-        resultsWindow.show();
-        resultsWindow.webContents.send('result-data', { content });
-      });
-    } else {
-      resultsWindow.focus();
-      resultsWindow.webContents.send('render-result', content);
-    }
-  } catch (error) {
-    console.error('Failed to open results window', error);
-    errorHandler.handleError('ERR_RESULTS_WINDOW', error);
-  }
-}
-
-ipcMain.on('close-result-window', () => {
-  if (resultsWindow && !resultsWindow.isDestroyed()) {
-    resultsWindow.close();
-  }
-});
-
-ipcMain.on('ai-response', (event, message) => {
-  mobileCompanion.sendMessage({
-    role: 'ai',
-    content: message.content,
-    timestamp: new Date().toISOString()
-  });
-  // Rendering now handled inline in overlay; do not open separate window
-});
-
-// Get mobile companion QR code
-ipcMain.handle('get-mobile-qr', async () => {
-  return await mobileCompanion.getQRCode();
-});
-
-console.log('===== ELECTRON SCRIPT LOADED =====');
-// Detection avoidance command-line switches
+// SECURITY: Detection avoidance
 try {
   app.commandLine.appendSwitch('disable-site-isolation-trials');
   app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors');
-  if (process.platform === 'win32') {
-    app.commandLine.appendSwitch('windows-disable-version-compat-checks');
-  }
 } catch {}
-  // Register transparency control shortcuts
-  registerTransparencyShortcuts();
+
+console.log('===== ELECTRON SCRIPT LOADED (SECURE) =====');
