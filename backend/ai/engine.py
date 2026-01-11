@@ -183,15 +183,17 @@ class PromptBuilder:
         screen_text: str, 
         audio_text: str, 
         question_type: QuestionType, 
-        language: str
+        language: str,
+        error_message: str = ""
     ) -> List[Dict[str, str]]:
         """Build intelligent prompt based on question type."""
         
         audio_context = audio_text if audio_text.strip() else "No audio input"
         
         if question_type == QuestionType.CODING:
-            system_prompt = PromptBuilder._coding_system_prompt(language)
-            user_prompt = f"CODE ONLY:\n{screen_text}\n\n{audio_context}"
+            system_prompt = PromptBuilder._coding_system_prompt(language, error_message)
+            error_section = f"\n\nERROR TO FIX:\n{error_message}" if error_message else ""
+            user_prompt = f"PROBLEM:\n{screen_text}{error_section}\n\nCONTEXT:\n{audio_context}"
         elif question_type == QuestionType.MCQ:
             system_prompt = PromptBuilder._mcq_system_prompt()
             user_prompt = f"QUESTION:\n{screen_text}\n\nCONTEXT:\n{audio_context}"
@@ -205,42 +207,54 @@ class PromptBuilder:
         ]
     
     @staticmethod
-    def _coding_system_prompt(language: str) -> str:
+    def _coding_system_prompt(language: str, error_message: str = "") -> str:
+        """Generate coding prompt with optional error-fixing instructions."""
+        
+        if error_message:
+            return f"""You are a code debugger. Fix the error in the provided code.
+
+**CRITICAL RULES:**
+• ANALYZE the error message carefully
+• IDENTIFY the root cause
+• PROVIDE corrected, runnable {language.upper()} code
+• CODE ONLY with inline comments
+• DO NOT repeat the same mistake
+
+**ERROR TO FIX:**
+{error_message}
+
+**OUTPUT:**
+Corrected code only."""
+        
         return f"""You are a code generator. OUTPUT CODE ONLY.
 
 **RULES:**
-• NO problem breakdown
-• NO analysis paragraphs  
-• NO explanations before/after code
-• CODE ONLY with inline comments if needed
-• Inline comments must be brief (max 5 words)
-• Format: `code  # brief comment`
-• Include necessary imports
+• NO explanations
+• CODE ONLY with brief inline comments
 • Make it executable
+• Handle edge cases
 
-**EXAMPLE:**
+**FORMAT:**
 ```python
-def solution(arr):  # Sort input array
-    return sorted(arr)  # Return sorted result
+def solution():  # comment
+    pass  # comment
 ```"""
 
     @staticmethod
     def _mcq_system_prompt() -> str:
-        return """Analyze MCQ and output answer.
+        return """Answer MCQ directly.
 
 **RULES:**
-• NO explanations
-• Output: **Answer: [Letter]** only
-• No justification unless asked"""
+• Output: **Answer: [Letter]**
+• No justification needed"""
 
     @staticmethod
     def _text_system_prompt() -> str:
-        return """Provide direct, concise explanation.
+        return """Provide concise explanation.
 
 **RULES:**
-• Be brief and clear
 • Use bullet points
-• No lengthy analysis"""
+• Be brief"""
 
 
 class AIClient:
@@ -345,42 +359,38 @@ class AIEngine:
         self.client = AIClient(self.config)
         logger.info(f"AI Engine initialized: {self.config.provider.value} - {self.config.model}")
 
-    def process(self, screen_text: str, audio_text: str = "") -> str:
+    def process(self, screen_text: str, audio_text: str = "", error_message: str = "") -> str:
         """
-        Process screenshot intelligently like Perplexity AI.
-        Analyzes question type and returns natural, clean output.
+        Process screenshot with optional error debugging.
         
         Args:
-            screen_text: Text extracted from screenshot
-            audio_text: Optional audio transcription context
+            screen_text: Text from screenshot
+            audio_text: Optional audio context
+            error_message: Optional error message to fix
             
         Returns:
-            Clean, formatted answer based on question type
+            Clean code or error message
         """
         try:
-            # Validate input
             if not screen_text or len(screen_text.strip()) < 5:
-                return "⚠️ Error: No text detected in screenshot."
+                return "⚠️ Error: No text detected."
             
-            # Analyze question type
             question_type = self.analyzer.analyze_type(screen_text)
-            
-            # Detect language for coding questions
             language = (
                 self.analyzer.detect_language(screen_text) 
                 if question_type == QuestionType.CODING 
                 else "python"
             )
             
-            # Build prompt
+            # Pass error message to prompt builder
             messages = self.prompt_builder.build(
                 screen_text, 
                 audio_text, 
                 question_type, 
-                language
+                language,
+                error_message
             )
             
-            # Call AI
             return self.client.create_chat_completion(messages)
             
         except Exception as e:
