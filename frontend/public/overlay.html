@@ -164,6 +164,39 @@
       padding: 12px;
       margin: 10px 0;
     }
+    
+    /* Multi-question display enhancements */
+    .question-block {
+      margin: 15px 0;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border-left: 3px solid #4CAF50;
+      border-radius: 4px;
+    }
+
+    .question-header {
+      font-weight: bold;
+      color: #4CAF50;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .code-language {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #aaa;
+      text-transform: uppercase;
+    }
+
+    .thinking strong {
+      color: #4CAF50;
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
@@ -305,12 +338,22 @@
     }
 
     function showResult(expl, code) {
-      const safeExpl = expl ? `<div class="thinking">${escapeHtml(expl)}</div>` : '';
-      const safeCode = code ? `<pre>${escapeHtml(code)}</pre>` : '';
-      const content = safeExpl + safeCode;
+      // Check if explanation contains multi-question markers
+      if (expl && expl.includes('**Question')) {
+        // Multi-question format detected
+        const content = formatMultiQuestionDisplay(expl, code);
+        currentResponseContent = content;
+        document.getElementById('result-content').innerHTML = content;
+      } else {
+        // Single question (legacy) format
+        const safeExpl = expl ? `<div class="thinking">${escapeHtml(expl)}</div>` : '';
+        const safeCode = code ? `<pre>${escapeHtml(code)}</pre>` : '';
+        const content = safeExpl + safeCode;
+        
+        currentResponseContent = content;
+        document.getElementById('result-content').innerHTML = content;
+      }
       
-      currentResponseContent = content;
-      document.getElementById('result-content').innerHTML = content;
       panel.style.display = 'block';
       isResultVisible = true;
       const r = navbar.getBoundingClientRect();
@@ -318,6 +361,63 @@
       
       try { ipcRenderer.send('expand-overlay'); } catch {}
       log('[DISPLAY] Result shown and locked');
+    }
+
+    function formatMultiQuestionDisplay(explanation, code) {
+      const questionBlocks = explanation.split(/(?=\*\*Question\s+\d+:?\*\*)/);
+      const codeSections = code.split(/(?=#\s*Question\s+\d+\s*-)/);
+      
+      let html = '';
+      
+      questionBlocks.forEach((block, index) => {
+        block = block.trim();
+        if (!block) return;
+        
+        // Parse the question block
+        const questionMatch = block.match(/\*\*Question\s+(\d+):?\*\*\s*(.*)/s);
+        const questionNum = questionMatch ? questionMatch[1] : index + 1;
+        const questionContent = questionMatch ? questionMatch[2].trim() : block;
+        
+        html += `<div class="question-block">
+          <div class="question-header">Question ${questionNum}</div>
+          <div class="question-content">${escapeHtml(questionContent)}</div>`;
+        
+        // Find matching code section
+        const codeMatch = codeSections.find(s => s.trim().startsWith(String(index + 1)) || s.trim().startsWith(`Question ${index + 1}`));
+        if (codeMatch) {
+          const codeText = codeMatch.replace(/^Question\s+\d+\s*-\s*\w+\s*/, '').trim();
+          if (codeText) {
+            const lang = detectLanguage(codeText);
+            html += `<div class="code-block" style="position:relative;">
+              ${lang ? `<span class="code-language">${lang}</span>` : ''}
+              <pre>${escapeHtml(codeText)}</pre>
+            </div>`;
+          }
+        }
+        
+        html += '</div>';
+      });
+      
+      return html;
+    }
+
+    function detectLanguage(code) {
+      const patterns = {
+        'Python': /def\s+\w+|import\s+|from\s+\w+\s+import|print\(/,
+        'JavaScript': /function\s+\w+|const\s+|let\s+|=>/,
+        'Java': /public\s+class|public\s+static\s+void\s+main/,
+        'C++': /#include|std::|cout\s*<</,
+        'C': /#include|printf\(/,
+      };
+      
+      const commentMatch = code.match(/^#\s*Question\s+\d+\s*-\s*(\w+)/i);
+      if (commentMatch) return commentMatch[1].toUpperCase();
+      
+      for (const [lang, pattern] of Object.entries(patterns)) {
+        if (pattern.test(code)) return lang;
+      }
+      
+      return '';
     }
 
     function showError(message, details) {

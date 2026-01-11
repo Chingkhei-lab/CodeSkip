@@ -5,7 +5,7 @@ import json
 import time
 import secrets
 import os
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from dotenv import load_dotenv
 from screen.capture import ScreenCapture
 from audio.transcription import AudioTranscriber
@@ -47,47 +47,77 @@ CACHE_DURATION = 10  # seconds
 # ============================================
 # Helpers: Backend-side AI response validation
 # ============================================
-def _strip_code_fences(s: str) -> str:
-    s = str(s or "")
-    s = s.strip()
-    if s.startswith("```"):
-        s = s.split("\n", 1)[1] if "\n" in s else s.replace("```", "", 1)
-    if s.endswith("```"):
-        s = s[:-3]
-    return s.strip()
-
 def validate_ai_response(raw_content: str) -> dict:
-    """Validate and normalize AI output to a strict JSON schema using Pydantic."""
-    try:
-        data = json.loads(raw_content)
-        validated_data = AIResponse(**data)
-        validated_data.python_code = _strip_code_fences(validated_data.python_code)
-        return validated_data.dict()
-    except (ValidationError, json.JSONDecodeError) as e:
-        logging.warning(f"AI response validation failed: {e}")
-        import re
-        
-        code_match = re.search(r"```python[\s\S]*?```", raw_content) or re.search(r"```[\s\S]*?```", raw_content)
-        code = code_match.group(0) if code_match else ""
-        code = _strip_code_fences(code)
-        
-        if code_match:
-            explanation = raw_content[:code_match.start()].strip()
-            after_code = raw_content[code_match.end():].strip()
-            if after_code:
-                explanation += f"\n\n{after_code}"
-        else:
-            explanation = raw_content.strip()
-        
-        if not explanation:
-            explanation = "The AI response was not in the expected JSON format, but here's the extracted code:"
-        
-        if not explanation and not code:
-            return {
-                "explanation": "The AI response was not in the expected JSON format and no content could be extracted.",
-                "python_code": ""
-            }
-        return {"explanation": explanation, "python_code": code}
+    """
+    Validate AI response in natural format (not JSON).
+    Separates explanation from code blocks.
+    """
+    if not raw_content or not raw_content.strip():
+        return {
+            "explanation": "No response received.",
+            "python_code": ""
+        }
+    
+    # Extract code blocks (if any)
+    code_blocks = []
+    explanation_text = raw_content
+    
+    # Find all code blocks with ``` markers
+    import re
+    code_pattern = r'```(\w*)\n(.*?)```'
+    matches = re.finditer(code_pattern, raw_content, re.DOTALL)
+    
+    for match in matches:
+        lang = match.group(1) or 'python'
+        code = match.group(2).strip()
+        code_blocks.append(code)
+    
+    # Remove code blocks from explanation
+    explanation_text = re.sub(code_pattern, '', raw_content, flags=re.DOTALL).strip()
+    
+    # If no code blocks found, check for inline code (without ```)
+    if not code_blocks:
+        # Look for function definitions, classes, etc.
+        if re.search(r'(def\s+\w+|class\s+\w+|function\s+\w+)', raw_content):
+            # Might be code without markers
+            lines = raw_content.split('\n')
+            code_lines = []
+            explanation_lines = []
+            
+            in_code = False
+            for line in lines:
+                # Simple heuristic: if line starts with indentation or keywords, it's code
+                if re.match(r'^\s+(def|class|if|for|while|return|import|from)', line) or in_code:
+                    code_lines.append(line)
+                    in_code = True
+                elif re.match(r'^(def|class)\s+', line):
+                    code_lines.append(line)
+                    in_code = True
+                else:
+                    if in_code and not line.strip():
+                        code_lines.append(line)
+                    else:
+                        explanation_lines.append(line)
+                        in_code = False
+            
+            if code_lines:
+                code_blocks.append('\n'.join(code_lines))
+                explanation_text = '\n'.join(explanation_lines).strip()
+    
+    # Combine all code blocks
+    final_code = '\n\n'.join(code_blocks)
+    
+    # Clean up explanation
+    final_explanation = explanation_text.strip()
+    
+    # If response is mostly code, put it in code section
+    if not final_explanation and final_code:
+        final_explanation = "Here's the solution:"
+    
+    return {
+        "explanation": final_explanation,
+        "python_code": final_code
+    }
 
 # ============================================
 # FastAPI App
