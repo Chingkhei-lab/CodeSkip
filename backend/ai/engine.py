@@ -342,11 +342,12 @@ class AIClient:
     def _http_error_message(self, status_code: int) -> str:
         """Map HTTP status codes to user-friendly messages."""
         messages = {
-            401: "Invalid API key",
-            429: "Rate limit exceeded",
-            400: "Bad request",
+            401: "Invalid API key - Check your OPENROUTER_API_KEY in .env",
+            429: "Rate limit exceeded - Try again later or use a free model",
+            400: f"Bad request - Model '{self.config.model}' may not be available. Try a free model like 'xiaomi/mimo-v2-flash:free'",
+            404: "Model not found - Check the model name in AI_MODEL setting",
         }
-        return messages.get(status_code, f"HTTP {status_code} error")
+        return messages.get(status_code, f"HTTP {status_code} error - {self.config.model}")
 
 
 class AIEngine:
