@@ -55,7 +55,7 @@ class AIConfig:
         return cls(
             provider=provider,
             api_key=api_key,
-            model=os.getenv("AI_MODEL", "gpt-3.5-turbo").strip(),
+            model=os.getenv("AI_MODEL", "meta-llama/llama-3-8b-instruct").strip(),
             temperature=float(os.getenv("AI_TEMPERATURE", "0.15")),
             max_tokens=int(os.getenv("AI_MAX_TOKENS", "2000")),
             timeout=int(os.getenv("AI_TIMEOUT", "30")),
@@ -357,7 +357,10 @@ class AIEngine:
         self.analyzer = QuestionAnalyzer()
         self.prompt_builder = PromptBuilder()
         self.client = AIClient(self.config)
-        logger.info(f"AI Engine initialized: {self.config.provider.value} - {self.config.model}")
+        
+        # ✅ VERIFY: Print the loaded model (remove in production)
+        logger.info(f"✅ AI Engine using: {self.config.provider.value} - {self.config.model}")
+        logger.info(f"✅ Model: {self.config.model}")
 
     def process(self, screen_text: str, audio_text: str = "", error_message: str = "") -> str:
         """
