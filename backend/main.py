@@ -193,6 +193,16 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
                     
                     logging.info("[AI] Processing analysis")
                     raw_response = ai_engine.process(screen_text, audio_text)
+                    
+                    # Handle error responses from AI engine
+                    if raw_response.startswith("⚠️ Error:"):
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "AI Processing Error",
+                            "details": raw_response
+                        })
+                        continue
+                    
                     response = validate_ai_response(raw_response)
                     logging.info("[AI] Analysis complete")
                     
@@ -262,6 +272,16 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
                             last_screenshot_data["screen_text"],
                             last_screenshot_data["audio_text"]
                         )
+                        
+                        # Handle error responses from AI engine
+                        if raw_response.startswith("⚠️ Error:"):
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "AI Processing Error",
+                                "details": raw_response
+                            })
+                            continue
+                        
                         response = validate_ai_response(raw_response)
                         
                         last_response_cache = {

@@ -1,20 +1,22 @@
+"""
+AI Engine - Handles model calls with minimal metadata exposure.
+"""
 import os
 import re
-import json
 import logging
 from enum import Enum
-from typing import Dict, Any, List, Final, Optional
+from typing import Dict, List, Final, Optional
 from dataclasses import dataclass
 
 import requests
 from dotenv import load_dotenv
 
 load_dotenv()
-logger = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)
 
 
 class QuestionType(Enum):
-    """Enumeration of supported question types."""
+    """Supported question classification types."""
     CODING = "coding"
     MCQ = "mcq"
     TEXT = "text"
@@ -28,7 +30,7 @@ class AIProvider(Enum):
 
 @dataclass
 class AIConfig:
-    """Immutable configuration for AI Engine."""
+    """Configuration for AI provider."""
     provider: AIProvider
     api_key: str
     model: str
@@ -40,399 +42,242 @@ class AIConfig:
 
     @classmethod
     def from_env(cls) -> "AIConfig":
-        """Load configuration from environment variables with validation."""
-        provider = AIProvider(os.getenv("AI_PROVIDER", "openai").strip().lower())
+        """Load configuration from environment variables."""
+        provider_name = os.getenv("AI_PROVIDER", "openrouter").strip().lower()
+        provider = AIProvider(provider_name)
         
-        api_key_map = {
+        key_map = {
             AIProvider.OPENROUTER: "OPENROUTER_API_KEY",
             AIProvider.OPENAI: "OPENAI_API_KEY"
         }
         
-        api_key = os.getenv(api_key_map[provider], "").strip()
+        api_key = os.getenv(key_map.get(provider, "")).strip()
         if not api_key:
-            raise ValueError(f"API key not found: {api_key_map[provider]}")
+            raise ValueError(f"API key not configured: {key_map[provider]}")
 
         return cls(
             provider=provider,
             api_key=api_key,
-            model=os.getenv("AI_MODEL", "meta-llama/llama-3-8b-instruct").strip(),
-            temperature=float(os.getenv("AI_TEMPERATURE", "0.15")),
-            max_tokens=int(os.getenv("AI_MAX_TOKENS", "2000")),
-            timeout=int(os.getenv("AI_TIMEOUT", "30")),
+            model=os.getenv("AI_MODEL", "").strip() or "meta-llama/llama-3-8b-instruct",
+            temperature=float(os.getenv("AI_TEMPERATURE", "0.1")),
+            max_tokens=int(os.getenv("AI_MAX_TOKENS", "1500")),
+            timeout=int(os.getenv("AI_TIMEOUT", "25")),
             referer=os.getenv("APP_REFERER", "http://localhost:3000"),
-            title=os.getenv("APP_TITLE", "UltraCode")
+            title=os.getenv("APP_TITLE", "Assistant")
         )
 
 
-class QuestionAnalyzer:
-    """Analyzes text to determine question type and programming language."""
+class _QuestionAnalyzer:
+    """Analyzes text to determine question type and language."""
     
-    # MORE SPECIFIC: Require multiple options for MCQ detection
-    MCQ_PATTERNS: Final[List[re.Pattern]] = [
-        re.compile(r'(?=.*\ba\))(?=.*\bb\))', re.IGNORECASE),  # Must have both a) and b)
-        re.compile(r'(?=.*\(a\))(?=.*\(b\))', re.IGNORECASE),  # Must have both (a) and (b)
-        re.compile(r'\bselect\b.*\bcorrect\b.*option', re.IGNORECASE),
-        re.compile(r'\bwhich\s+of\s+the\s+following\b.*\boptions?\b', re.IGNORECASE),
-        re.compile(r'\bchoose\b.*\bcorrect\b.*answer\b', re.IGNORECASE),
+    _MCQ_PATTERNS: Final[List[re.Pattern]] = [
+        re.compile(r"\(a\).*\(b\)", re.IGNORECASE),
+        re.compile(r"\ba\)\s*.*\bb\)", re.IGNORECASE),
+        re.compile(r"select.*correct.*option", re.IGNORECASE),
+        re.compile(r"which.*following.*options?", re.IGNORECASE),
     ]
     
-    # STRONGER: More robust coding detection
-    CODING_PATTERNS: Final[List[re.Pattern]] = [
-        re.compile(r'\bwrite\s+(?:a\s+)?(?:function|program|code|solution)\b', re.IGNORECASE),
-        re.compile(r'\bimplement\s+(?:a\s+)?(?:function|algorithm|solution)\b', re.IGNORECASE),
-        re.compile(r'\bcreate\s+(?:a\s+)?(?:function|class|program)\b', re.IGNORECASE),
-        re.compile(r'\bsolve\s+(?:the\s+)?(?:problem|code|challenge)\b', re.IGNORECASE),
-        re.compile(r'\bcode\s+for\b', re.IGNORECASE),
-        re.compile(r'\breturn\s+(?:the\s+)?\w+', re.IGNORECASE),
-        re.compile(r'def\s+\w+\s*\(|class\s+\w+\s*:', re.IGNORECASE),  # Python syntax
-        re.compile(r'#code\s+here|#\s*write\s+your\s+code\b', re.IGNORECASE),  # Common placeholders
+    _CODING_PATTERNS: Final[List[re.Pattern]] = [
+        re.compile(r"write.*function|write.*program|write.*code", re.IGNORECASE),
+        re.compile(r"implement.*function|implement.*algorithm", re.IGNORECASE),
+        re.compile(r"create.*function|create.*class", re.IGNORECASE),
+        re.compile(r"solve.*problem|solve.*code", re.IGNORECASE),
+        re.compile(r"def\s+\w+\s*\(|class\s+\w+\s*:"),
     ]
     
-    LANGUAGE_KEYWORDS: Final[Dict[str, List[str]]] = {
-        'python': ['python', 'py', 'python3'],
-        'javascript': ['javascript', 'js', 'node', 'nodejs'],
-        'java': ['java'],
-        'c++': ['cpp', 'c\+\+', 'cxx'],
-        'c': ['c'],
-        'csharp': ['c#', 'csharp', 'cs'],
-        'go': ['go', 'golang'],
-        'rust': ['rust', 'rs'],
-        'typescript': ['typescript', 'ts'],
-        'ruby': ['ruby', 'rb'],
-        'php': ['php'],
-        'swift': ['swift'],
-        'kotlin': ['kotlin', 'kt'],
-        'r': ['r'],
-        'sql': ['sql', 'mysql', 'postgresql'],
-    }
-    
-    SYNTAX_PATTERNS: Final[Dict[str, List[re.Pattern]]] = {
-        'python': [
-            re.compile(r'def\s+\w+\s*\('),
-            re.compile(r'class\s+\w+\s*:'),
-            re.compile(r'import\s+\w+'),
-        ],
-        'javascript': [
-            re.compile(r'function\s+\w+\s*\('),
-            re.compile(r'const\s+\w+\s*='),
-            re.compile(r'=>'),
-        ],
-        'java': [
-            re.compile(r'public\s+class'),
-            re.compile(r'public\s+static\s+void'),
-        ],
-        'c++': [
-            re.compile(r'#include\s*<'),
-            re.compile(r'std::'),
-        ],
+    _LANG_KEYWORDS: Final[Dict[str, List[str]]] = {
+        "python": ["python", "py"],
+        "javascript": ["javascript", "js", "node"],
+        "java": ["java"],
+        "cpp": ["c++", "cpp"],
+        "go": ["go", "golang"],
+        "rust": ["rust"],
+        "typescript": ["typescript", "ts"],
     }
 
     def analyze_type(self, text: str) -> QuestionType:
-        """Detect question type from text with improved logic."""
+        """Detect question classification."""
         if not text or len(text.strip()) < 10:
-            logger.warning("Text too short for analysis, defaulting to TEXT")
             return QuestionType.TEXT
 
         text_lower = text.lower()
         
-        # CHECK CODING FIRST to avoid MCQ false positives
-        if any(pattern.search(text_lower) for pattern in self.CODING_PATTERNS):
-            logger.info("Detected CODING question")
+        if any(p.search(text_lower) for p in self._CODING_PATTERNS):
             return QuestionType.CODING
         
-        # Then check MCQ (requires multiple options)
-        if any(pattern.search(text_lower) for pattern in self.MCQ_PATTERNS):
-            logger.info("Detected MCQ question")
+        if any(p.search(text_lower) for p in self._MCQ_PATTERNS):
             return QuestionType.MCQ
         
-        # Default to text
-        logger.info("Detected TEXT question")
         return QuestionType.TEXT
     
     def detect_language(self, text: str) -> str:
-        """Detect programming language from context, defaults to 'python'."""
+        """Detect programming language from context."""
         if not text:
-            return 'python'
-            
+            return "python"
+        
         text_lower = text.lower()
         
-        # Explicit language mention
-        for lang, keywords in self.LANGUAGE_KEYWORDS.items():
-            for keyword in keywords:
-                pattern = rf'\b{keyword}\b'
-                if re.search(pattern, text_lower):
-                    logger.info(f"Detected language: {lang}")
+        for lang, keywords in self._LANG_KEYWORDS.items():
+            for kw in keywords:
+                if re.search(rf"\b{kw}\b", text_lower):
                     return lang
         
-        # Syntax-based detection
-        for lang, patterns in self.SYNTAX_PATTERNS.items():
-            for pattern in patterns:
-                if pattern.search(text):
-                    logger.info(f"Detected language from syntax: {lang}")
-                    return lang
-        
-        logger.debug("Defaulting to Python")
-        return 'python'
+        return "python"
 
 
-class PromptBuilder:
-    """Constructs prompts based on question type and context."""
-
+class _PromptBuilder:
+    """Constructs prompts based on question type."""
+    
     @staticmethod
     def build(
         screen_text: str, 
         audio_text: str, 
         question_type: QuestionType, 
         language: str,
-        error_message: str = ""
+        error_msg: str = ""
     ) -> List[Dict[str, str]]:
-        """Build intelligent prompt based on question type."""
-        
-        audio_context = audio_text if audio_text.strip() else "No audio input"
+        """Build prompt messages for the model."""
+        audio_ctx = audio_text.strip() if audio_text else "No audio"
         
         if question_type == QuestionType.CODING:
-            system_prompt = PromptBuilder._coding_system_prompt(language, error_message)
-            error_section = f"\n\nERROR TO FIX:\n{error_message}" if error_message else ""
-            user_prompt = f"PROBLEM:\n{screen_text}{error_section}\n\nCONTEXT:\n{audio_context}"
+            sys_prompt = _PromptBuilder._coding_prompt(language, error_msg)
+            err_section = f"\n\nERROR:\n{error_msg}" if error_msg else ""
+            user = f"PROBLEM:\n{screen_text}{err_section}\n\nAUDIO:{audio_ctx}"
         elif question_type == QuestionType.MCQ:
-            system_prompt = PromptBuilder._mcq_system_prompt()
-            user_prompt = f"QUESTION:\n{screen_text}\n\nCONTEXT:\n{audio_context}"
+            sys_prompt = "Answer MCQ. Output: **Answer: [Letter]**"
+            user = f"QUESTION:\n{screen_text}\n\nAUDIO:{audio_ctx}"
         else:
-            system_prompt = PromptBuilder._text_system_prompt()
-            user_prompt = f"QUESTION:\n{screen_text}\n\nCONTEXT:\n{audio_context}"
+            sys_prompt = "Explain concisely with bullet points."
+            user = f"QUESTION:\n{screen_text}\n\nAUDIO:{audio_ctx}"
         
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
+        return [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user}]
     
     @staticmethod
-    def _coding_system_prompt(language: str, error_message: str = "") -> str:
-        """Generate coding prompt with optional error-fixing instructions."""
+    def _coding_prompt(language: str, error_msg: str) -> str:
+        """Generate coding system prompt."""
+        lang_upper = language.upper()
         
-        if error_message:
-            return f"""You are a code debugger. Fix the error in the provided code.
-
-**CRITICAL RULES:**
-• ANALYZE the error message carefully
-• IDENTIFY the root cause
-• PROVIDE corrected, runnable {language.upper()} code
-• CODE ONLY with inline comments
-• DO NOT repeat the same mistake
-
-**ERROR TO FIX:**
-{error_message}
-
-**OUTPUT:**
-Corrected code only."""
+        if error_msg:
+            return f"Debug the {lang_upper} code. Fix the error. Output corrected code only."
         
-        return f"""You are a code generator. OUTPUT CODE ONLY.
-
-**RULES:**
-• NO explanations
-• CODE ONLY with brief inline comments
-• Make it executable
-• Handle edge cases
-
-**FORMAT:**
-```python
-def solution():  # comment
-    pass  # comment
-```"""
-
-    @staticmethod
-    def _mcq_system_prompt() -> str:
-        return """Answer MCQ directly.
-
-**RULES:**
-• Output: **Answer: [Letter]**
-• No justification needed"""
-
-    @staticmethod
-    def _text_system_prompt() -> str:
-        return """Provide concise explanation.
-
-**RULES:**
-• Use bullet points
-• Be brief"""
+        return f"Generate {lang_upper} code. Code only with inline comments."
 
 
-class AIClient:
-    """Handles AI provider API calls."""
-
-    MAX_RETRIES: Final[int] = 2
-    RETRY_STATUS_CODES: Final[List[int]] = [429, 500, 502, 503, 504]
+class _AIClient:
+    """Low-level AI API client with retry logic."""
+    
+    _RETRY_CODES: Final[List[int]] = [429, 500, 502, 503, 504]
+    _MAX_RETRIES: Final[int] = 2
 
     def __init__(self, config: AIConfig):
-        self.config = config
-        self.base_url = self._get_base_url()
-        self.headers = self._build_headers()
+        self._config = config
+        self._base_url = self._get_base_url()
+        self._headers = self._build_headers()
 
     def _get_base_url(self) -> str:
-        """Get the correct API base URL."""
-        urls = {
+        """Get API endpoint base URL."""
+        return {
             AIProvider.OPENROUTER: "https://openrouter.ai/api/v1",
             AIProvider.OPENAI: "https://api.openai.com/v1"
-        }
-        return urls[self.config.provider]
+        }[self._config.provider]
 
     def _build_headers(self) -> Dict[str, str]:
-        """Build API request headers."""
-        headers = {
+        """Build request headers."""
+        h = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.config.api_key}"
+            "Authorization": f"Bearer {self._config.api_key}",
         }
         
-        if self.config.provider == AIProvider.OPENROUTER:
-            headers.update({
-                "HTTP-Referer": self.config.referer,
-                "X-Title": self.config.title
-            })
+        if self._config.provider == AIProvider.OPENROUTER:
+            h["HTTP-Referer"] = self._config.referer or ""
+            h["X-Title"] = self._config.title or ""
         
-        return headers
+        return h
 
-    def create_chat_completion(self, messages: List[Dict[str, str]]) -> str:
-        """Call chat completions endpoint with retry logic."""
-        url = f"{self.base_url}/chat/completions"
+    def complete(self, messages: List[Dict[str, str]]) -> str:
+        """Execute chat completion request."""
+        url = f"{self._base_url}/chat/completions"
         
         payload = {
-            "model": self.config.model,
+            "model": self._config.model,
             "messages": messages,
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens
+            "temperature": self._config.temperature,
+            "max_tokens": self._config.max_tokens
         }
 
-        for attempt in range(1, self.MAX_RETRIES + 1):
+        for attempt in range(1, self._MAX_RETRIES + 1):
             try:
-                logger.info(f"Calling {self.config.provider.value} API (attempt {attempt})")
                 response = requests.post(
                     url,
-                    headers=self.headers,
+                    headers=self._headers,
                     json=payload,
-                    timeout=self.config.timeout  # ✅ FIXED
+                    timeout=self._config.timeout
                 )
                 response.raise_for_status()
                 
-                content = response.json()["choices"][0]["message"]["content"]
-                logger.info(f"Received response ({len(content)} chars)")
-                return content
+                return response.json()["choices"][0]["message"]["content"]
 
             except requests.exceptions.Timeout:
-                if attempt == self.MAX_RETRIES:
+                if attempt == self._MAX_RETRIES:
                     raise
-                logger.warning("Request timed out, retrying...")
-            
+                
             except requests.exceptions.HTTPError as e:
-                status_code = e.response.status_code
-                error_msg = self._http_error_message(status_code)
-                
-                if status_code in self.RETRY_STATUS_CODES and attempt < self.MAX_RETRIES:
-                    logger.warning(f"HTTP {status_code}, retrying...")
+                status = e.response.status_code
+                if status in self._RETRY_CODES and attempt < self._MAX_RETRIES:
                     continue
-                
-                raise Exception(error_msg)
+                raise
             
             except requests.exceptions.ConnectionError:
-                raise Exception("Failed to connect to AI service")
-            
-            except Exception as e:
-                logger.error(f"Unexpected error: {e}", exc_info=True)
-                raise Exception(f"Error: {str(e)}")
+                raise Exception("Connection failed")
 
-    def _http_error_message(self, status_code: int) -> str:
-        """Map HTTP status codes to user-friendly messages."""
-        messages = {
-            401: "Invalid API key - Check your OPENROUTER_API_KEY in .env",
-            429: "Rate limit exceeded - Try again later or use a free model",
-            400: f"Bad request - Model '{self.config.model}' may not be available. Try a free model like 'xiaomi/mimo-v2-flash:free'",
-            404: "Model not found - Check the model name in AI_MODEL setting",
-        }
-        return messages.get(status_code, f"HTTP {status_code} error - {self.config.model}")
+        raise Exception("Max retries exceeded")
 
 
 class AIEngine:
-    """Main engine that orchestrates question analysis and AI interaction."""
+    """Main orchestrator for AI processing."""
     
     def __init__(self, config: Optional[AIConfig] = None):
-        self.config = config or AIConfig.from_env()
-        self.analyzer = QuestionAnalyzer()
-        self.prompt_builder = PromptBuilder()
-        self.client = AIClient(self.config)
-        
-        # ✅ VERIFY: Print the loaded model (remove in production)
-        logger.info(f"✅ AI Engine using: {self.config.provider.value} - {self.config.model}")
-        logger.info(f"✅ Model: {self.config.model}")
+        self._config = config or AIConfig.from_env()
+        self._analyzer = _QuestionAnalyzer()
+        self._builder = _PromptBuilder()
+        self._client = _AIClient(self._config)
 
-    def process(self, screen_text: str, audio_text: str = "", error_message: str = "") -> str:
+    def process(self, screen_text: str, audio_text: str = "", error_msg: str = "") -> str:
         """
-        Process screenshot with optional error debugging.
+        Process input and return AI response.
         
         Args:
-            screen_text: Text from screenshot
-            audio_text: Optional audio context
-            error_message: Optional error message to fix
+            screen_text: Text extracted from screenshot
+            audio_text: Optional transcribed audio
+            error_msg: Optional error to debug
             
         Returns:
-            Clean code or error message
+            AI-generated response
         """
         try:
             if not screen_text or len(screen_text.strip()) < 5:
-                return "⚠️ Error: No text detected."
+                return "⚠️ No text detected."
+
+            q_type = self._analyzer.analyze_type(screen_text)
+            lang = self._analyzer.detect_language(screen_text) if q_type == QuestionType.CODING else "python"
             
-            question_type = self.analyzer.analyze_type(screen_text)
-            language = (
-                self.analyzer.detect_language(screen_text) 
-                if question_type == QuestionType.CODING 
-                else "python"
-            )
+            messages = self._builder.build(screen_text, audio_text, q_type, lang, error_msg)
             
-            # Pass error message to prompt builder
-            messages = self.prompt_builder.build(
-                screen_text, 
-                audio_text, 
-                question_type, 
-                language,
-                error_message
-            )
-            
-            return self.client.create_chat_completion(messages)
+            return self._client.complete(messages)
             
         except Exception as e:
-            logger.error(f"Processing error: {e}", exc_info=True)
-            return self._format_error(str(e))
-
-    def _format_error(self, message: str) -> str:
-        """Format error message for user display."""
-        return f"⚠️ Error: {message}\n\nPlease check your configuration and try again."
+            _logger.error(f"AI processing error: {type(e).__name__}: {e}")
+            return f"⚠️ Error: {type(e).__name__}"
 
 
-# Usage example
+# Standalone test
 if __name__ == "__main__":
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     
     try:
         engine = AIEngine()
-        
-        # Example usage with the provided screenshot text
-        screen = """K-th element of two Arrays
-Given two sorted arrays a[] and b[] and an element k, the task is to find the element
-position of the combined sorted array.
-Input: a = [2, 3, 6, 7, 9], b = [1, 4, 8, 10], k = 5
-Output: 6
-class Solution:
-    def kthElement(self, a, b, k):
-        #code here"""
-        
-        audio = "Need optimal binary search solution"
-        
-        response = engine.process(screen, audio)
-        print("=" * 50)
-        print(response)
-        print("=" * 50)
-        
+        test_screen = "Write a function to reverse a string."
+        result = engine.process(test_screen, "")
+        print(f"Response:\n{result}")
     except ValueError as e:
-        logger.error(f"Configuration error: {e}")
+        print(f"Config error: {e}")
