@@ -10,7 +10,7 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "electron-dev": "concurrently \"cross-env BROWSER=none npm start\" \"npx wait-on --timeout 60000 http-get://127.0.0.1:3000 && npx electron .\"",
-    "electron-pack": "electron-builder build --win --mac --linux",
+    "electron-pack": "npm run build && copy public\\electron.js build\\electron.js && electron-builder build --win",
     "postinstall": "electron-builder install-app-deps"
   },
   "author": "",
@@ -57,7 +57,14 @@
     "productName": "UltraCode Clone",
     "files": [
       "build/**/*",
-      "node_modules/**/*"
+      "public/electron.js",
+      "public/preload.js"
+    ],
+    "extraFiles": [
+      {
+        "from": "node_modules",
+        "to": "node_modules"
+      }
     ],
     "directories": {
       "buildResources": "public"

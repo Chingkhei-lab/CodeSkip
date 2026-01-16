@@ -7,7 +7,9 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "electron:build": "cd frontend && npm run electron-pack",
+    "electron:dev": "cd frontend && npm run electron-dev"
   },
   "keywords": [],
   "author": "",
